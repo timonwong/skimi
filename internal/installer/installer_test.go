@@ -139,9 +139,9 @@ func TestResolvePackageAgents(t *testing.T) {
 	defaults := []string{types.AgentClaude, types.AgentStandard, types.AgentCodex}
 
 	tests := []struct {
-		name    string
-		pkg     types.SkillPackageConfig
-		want    []string
+		name string
+		pkg  types.SkillPackageConfig
+		want []string
 	}{
 		{
 			name: "nil agents returns defaults unchanged",

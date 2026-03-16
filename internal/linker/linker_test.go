@@ -70,8 +70,8 @@ func TestSkillLinkPath(t *testing.T) {
 			want: filepath.Join(home, ".pi", "agent", "skills", "my-skill"),
 		},
 		{
-			name:      "claude with targetDir",
-			agent:     types.AgentClaude, targetDir: "sub", skillName: "my-skill",
+			name:  "claude with targetDir",
+			agent: types.AgentClaude, targetDir: "sub", skillName: "my-skill",
 			want: filepath.Join(home, ".claude", "skills", "sub", "my-skill"),
 		},
 		{
