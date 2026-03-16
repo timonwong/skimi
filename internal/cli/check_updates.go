@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/timonwong/skimi/internal/config"
 	"github.com/timonwong/skimi/internal/git"
+	"github.com/timonwong/skimi/internal/installer"
 	"github.com/timonwong/skimi/internal/lock"
 )
 
@@ -38,7 +39,7 @@ func newCheckUpdatesCmd() *cobra.Command {
 				if pkg.Repo == "" {
 					continue
 				}
-				dest := repoStorePath(globalStoreDir, pkg.Repo)
+				dest := installer.RepoStorePath(globalStoreDir, pkg.Repo)
 				if _, statErr := os.Stat(dest); os.IsNotExist(statErr) {
 					fmt.Printf("%-40s  not cloned\n", pkg.Repo)
 					continue

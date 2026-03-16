@@ -2,9 +2,9 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"text/tabwriter"
-	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/timonwong/skimi/internal/lock"

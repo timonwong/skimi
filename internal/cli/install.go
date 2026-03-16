@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/huh"
@@ -136,7 +135,7 @@ func selectSkillsTUI(skills []types.DetectedSkill) ([]string, error) {
 func resolveSource(source, storeDir string) (dir string, isRemote bool, err error) {
 	// Local path check.
 	if strings.HasPrefix(source, "/") || strings.HasPrefix(source, "~/") || strings.HasPrefix(source, "./") {
-		expanded, err := expandPath(source)
+		expanded, err := installer.ExpandPath(source)
 		if err != nil {
 			return "", false, err
 		}
@@ -144,7 +143,7 @@ func resolveSource(source, storeDir string) (dir string, isRemote bool, err erro
 	}
 
 	// Treat as a git repo.
-	dest := repoStorePath(storeDir, source)
+	dest := installer.RepoStorePath(storeDir, source)
 	if _, statErr := os.Stat(dest); os.IsNotExist(statErr) {
 		fmt.Printf("Cloning %s ...\n", source)
 		if err := git.Clone(source, dest); err != nil {
@@ -157,25 +156,4 @@ func resolveSource(source, storeDir string) (dir string, isRemote bool, err erro
 		}
 	}
 	return dest, true, nil
-}
-
-// expandPath expands ~ to the home directory.
-func expandPath(p string) (string, error) {
-	if strings.HasPrefix(p, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		p = filepath.Join(home, p[2:])
-	}
-	return filepath.Abs(p)
-}
-
-// repoStorePath mirrors installer.repoStorePath — kept local to avoid export.
-func repoStorePath(storeDir, repo string) string {
-	repo = strings.TrimPrefix(repo, "https://")
-	repo = strings.TrimPrefix(repo, "http://")
-	repo = strings.TrimPrefix(repo, "git@")
-	repo = strings.ReplaceAll(repo, ":", "/")
-	return filepath.Join(storeDir, repo)
 }

@@ -23,9 +23,9 @@ func TestRepoStorePath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.repo, func(t *testing.T) {
-			got := repoStorePath(store, tt.repo)
+			got := RepoStorePath(store, tt.repo)
 			if got != tt.want {
-				t.Errorf("repoStorePath(%q, %q) = %q, want %q", store, tt.repo, got, tt.want)
+				t.Errorf("RepoStorePath(%q, %q) = %q, want %q", store, tt.repo, got, tt.want)
 			}
 		})
 	}
@@ -65,12 +65,12 @@ func TestExpandPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := expandPath(tt.input)
+			got, err := ExpandPath(tt.input)
 			if err != nil {
-				t.Fatalf("expandPath(%q) error: %v", tt.input, err)
+				t.Fatalf("ExpandPath(%q) error: %v", tt.input, err)
 			}
 			if got != tt.want {
-				t.Errorf("expandPath(%q) = %q, want %q", tt.input, got, tt.want)
+				t.Errorf("ExpandPath(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}
@@ -139,9 +139,9 @@ func TestResolvePackageAgents(t *testing.T) {
 	defaults := []string{types.AgentClaude, types.AgentStandard, types.AgentCodex}
 
 	tests := []struct {
-		name    string
-		pkg     types.SkillPackageConfig
-		want    []string
+		name string
+		pkg  types.SkillPackageConfig
+		want []string
 	}{
 		{
 			name: "nil agents returns defaults unchanged",
