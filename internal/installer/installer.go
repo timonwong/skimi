@@ -10,6 +10,7 @@ import (
 	"github.com/timonwong/skimi/internal/git"
 	"github.com/timonwong/skimi/internal/linker"
 	"github.com/timonwong/skimi/internal/lock"
+	"github.com/timonwong/skimi/internal/source"
 	"github.com/timonwong/skimi/internal/types"
 )
 
@@ -83,12 +84,26 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 
 	switch {
 	case pkg.Repo != "":
-		repo = pkg.Repo
-		dest := RepoStorePath(opts.StoreDir, pkg.Repo)
-		if err := ensureRepo(pkg.Repo, dest); err != nil {
+		// Parse the repo to handle shorthand formats like "owner/repo"
+		parsed, err := source.Parse(pkg.Repo)
+		if err != nil {
+			return nil, fmt.Errorf("parse repo %q: %w", pkg.Repo, err)
+		}
+		if parsed.Kind != source.SourceRemote {
+			return nil, fmt.Errorf("repo %q resolved to local path, use local_path instead", pkg.Repo)
+		}
+
+		repo = parsed.Repo
+		dest := RepoStorePath(opts.StoreDir, parsed.Repo)
+		if err := ensureRepo(parsed.Repo, dest); err != nil {
 			return nil, err
 		}
+
+		// Apply subdir if specified in the source
 		sourceDir = dest
+		if parsed.Subdir != "" {
+			sourceDir = filepath.Join(dest, parsed.Subdir)
+		}
 
 	case pkg.LocalPath != "":
 		localPath = pkg.LocalPath
