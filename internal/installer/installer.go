@@ -28,9 +28,9 @@ func Run(cfg *types.SkmConfig, opts Options) error {
 	}
 
 	// Build a set of currently installed skill names for stale-link detection.
-	oldSkills := make(map[string]types.InstalledSkill, len(lf.Skills))
+	oldLinks := make(map[string][]string, len(lf.Skills))
 	for _, s := range lf.Skills {
-		oldSkills[s.Name] = s
+		oldLinks[s.Name] = append(oldLinks[s.Name], s.LinkedTo...)
 	}
 
 	defaultAgents := resolveDefaultAgents(cfg)
@@ -51,13 +51,13 @@ func Run(cfg *types.SkmConfig, opts Options) error {
 		newSkillNames[s.Name] = struct{}{}
 	}
 
-	for name, old := range oldSkills {
+	for name, links := range oldLinks {
 		if _, ok := newSkillNames[name]; ok {
 			continue
 		}
 		fmt.Printf("Removing stale skill %q\n", name)
 		if !opts.DryRun {
-			for _, link := range old.LinkedTo {
+			for _, link := range links {
 				if err := linker.RemoveLink(link); err != nil {
 					fmt.Fprintf(os.Stderr, "warning: remove link %s: %v\n", link, err)
 				}
