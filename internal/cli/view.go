@@ -15,7 +15,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"github.com/timonwong/skimi/internal/detect"
-	"github.com/timonwong/skimi/internal/git"
 	"github.com/timonwong/skimi/internal/types"
 )
 
@@ -288,16 +287,6 @@ func runView(source, storeDir string) error {
 	if err != nil {
 		return err
 	}
-
-	// Retain commit info in case we want to display it in the future.
-	var commitShort string
-	if commit, err := git.HeadCommit(sourceDir); err == nil {
-		commitShort = commit
-		if len(commitShort) > 8 {
-			commitShort = commitShort[:8]
-		}
-	}
-	_ = commitShort
 
 	skills, err := detect.Scan(sourceDir)
 	if err != nil {

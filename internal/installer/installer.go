@@ -84,7 +84,7 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 	switch {
 	case pkg.Repo != "":
 		repo = pkg.Repo
-		dest := repoStorePath(opts.StoreDir, pkg.Repo)
+		dest := RepoStorePath(opts.StoreDir, pkg.Repo)
 		if err := ensureRepo(pkg.Repo, dest); err != nil {
 			return nil, err
 		}
@@ -92,7 +92,7 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 
 	case pkg.LocalPath != "":
 		localPath = pkg.LocalPath
-		expanded, err := expandPath(pkg.LocalPath)
+		expanded, err := ExpandPath(pkg.LocalPath)
 		if err != nil {
 			return nil, err
 		}
@@ -116,7 +116,7 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 	// Determine commit for repo packages.
 	var commit string
 	if repo != "" {
-		dest := repoStorePath(opts.StoreDir, repo)
+		dest := RepoStorePath(opts.StoreDir, repo)
 		commit, _ = git.HeadCommit(dest)
 	}
 
@@ -181,9 +181,9 @@ func ensureRepo(repo, dest string) error {
 	return git.Pull(dest)
 }
 
-// repoStorePath converts a repo identifier to its path inside the store dir.
+// RepoStorePath converts a repo identifier to its path inside the store dir.
 // e.g. "github.com/foo/bar" → "<store>/github.com/foo/bar"
-func repoStorePath(storeDir, repo string) string {
+func RepoStorePath(storeDir, repo string) string {
 	// Strip protocol prefix if present.
 	repo = strings.TrimPrefix(repo, "https://")
 	repo = strings.TrimPrefix(repo, "http://")
@@ -192,8 +192,8 @@ func repoStorePath(storeDir, repo string) string {
 	return filepath.Join(storeDir, repo)
 }
 
-// expandPath expands ~ and returns an absolute path.
-func expandPath(p string) (string, error) {
+// ExpandPath expands ~ and returns an absolute path.
+func ExpandPath(p string) (string, error) {
 	if strings.HasPrefix(p, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {
