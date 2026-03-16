@@ -14,16 +14,24 @@ import (
 
 const skillFile = "SKILL.md"
 
-// Scan recursively walks rootDir looking for directories that contain a
-// SKILL.md file. When a SKILL.md is found the walk does not descend further
-// into that directory (matching skm behaviour). Returns one DetectedSkill per
-// unique skill name found; when duplicates exist the shallowest path wins.
+// Scan looks for SKILL.md files in the skills/ subdirectory of rootDir.
+// If no skills/ directory exists, returns an empty slice (not an error).
+// When a SKILL.md is found the walk does not descend further into that
+// directory (matching skm behaviour). Returns one DetectedSkill per unique
+// skill name found; when duplicates exist the shallowest path wins.
 func Scan(rootDir string) ([]types.DetectedSkill, error) {
+	skillsDir := filepath.Join(rootDir, "skills")
+	info, err := os.Stat(skillsDir)
+	if err != nil || !info.IsDir() {
+		// No skills/ directory — return empty slice
+		return nil, nil
+	}
+
 	var raw []types.DetectedSkill
-	if err := walk(rootDir, rootDir, &raw); err != nil {
+	if err := walk(skillsDir, skillsDir, &raw); err != nil {
 		return nil, err
 	}
-	return deduplicateSkills(raw, rootDir), nil
+	return deduplicateSkills(raw, skillsDir), nil
 }
 
 // deduplicateSkills returns skills with duplicate names removed, keeping the
