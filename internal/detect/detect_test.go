@@ -190,4 +190,37 @@ func TestScan(t *testing.T) {
 			t.Errorf("expected 'deep', got %q", got[0].Name)
 		}
 	})
+
+	t.Run("deduplication: same name at different depths", func(t *testing.T) {
+		dir := t.TempDir()
+
+		// Shallow: planning-with-files/SKILL.md (depth 1)
+		shallowDir := filepath.Join(dir, "planning-with-files")
+		if err := os.MkdirAll(shallowDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(shallowDir, "SKILL.md"), []byte("---\nname: planning-with-files\n---\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		// Deep: group/planning-with-files/SKILL.md (depth 2)
+		deepDir := filepath.Join(dir, "group", "planning-with-files")
+		if err := os.MkdirAll(deepDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(deepDir, "SKILL.md"), []byte("---\nname: planning-with-files\n---\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		got, err := Scan(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []types.DetectedSkill{
+			{Name: "planning-with-files", SkillPath: shallowDir},
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("Scan() mismatch (-want +got):\n%s", diff)
+		}
+	})
 }

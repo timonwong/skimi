@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/timonwong/skimi/internal/config"
@@ -73,7 +74,7 @@ func newCheckUpdatesCmd() *cobra.Command {
 				if localCommit != "" {
 					log, _ := git.Log(dest, localCommit, remoteCommit)
 					if log != "" {
-						for _, line := range splitLines(log) {
+						for _, line := range strings.Split(log, "\n") {
 							fmt.Printf("    %s\n", line)
 						}
 					}
@@ -88,19 +89,4 @@ func newCheckUpdatesCmd() *cobra.Command {
 			return nil
 		},
 	}
-}
-
-func splitLines(s string) []string {
-	var lines []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			lines = append(lines, s[start:i])
-			start = i + 1
-		}
-	}
-	if start < len(s) {
-		lines = append(lines, s[start:])
-	}
-	return lines
 }

@@ -134,7 +134,7 @@ func selectSkillsTUI(skills []types.DetectedSkill) ([]string, error) {
 // isRemote is true when the source was a git repo URL.
 func resolveSource(source, storeDir string) (dir string, isRemote bool, err error) {
 	// Local path check.
-	if strings.HasPrefix(source, "/") || strings.HasPrefix(source, "~/") || strings.HasPrefix(source, "./") {
+	if strings.HasPrefix(source, "/") || strings.HasPrefix(source, "~/") || strings.HasPrefix(source, "./") || strings.HasPrefix(source, "../") {
 		expanded, err := installer.ExpandPath(source)
 		if err != nil {
 			return "", false, err
