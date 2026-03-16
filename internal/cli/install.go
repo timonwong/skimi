@@ -1,0 +1,181 @@
+package cli
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/charmbracelet/huh"
+	"github.com/spf13/cobra"
+	"github.com/timonwong/skimi/internal/config"
+	"github.com/timonwong/skimi/internal/detect"
+	"github.com/timonwong/skimi/internal/git"
+	"github.com/timonwong/skimi/internal/installer"
+	"github.com/timonwong/skimi/internal/types"
+)
+
+func newInstallCmd() *cobra.Command {
+	var dryRun bool
+
+	cmd := &cobra.Command{
+		Use:   "install [source [skill...]]",
+		Short: "Install skills from skills.yaml or interactively from a source",
+		Long: `Install skills declared in skills.yaml.
+
+When a source is provided (git repo or local path), skimi detects available
+skills and lets you select which ones to install interactively.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			opts := installer.Options{
+				StoreDir: globalStoreDir,
+				LockPath: globalLockFile,
+				DryRun:   dryRun,
+			}
+
+			if len(args) == 0 {
+				return runInstallFromConfig(opts)
+			}
+			return runInstallInteractive(args[0], args[1:], opts)
+		},
+	}
+
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print what would be done without making changes")
+	return cmd
+}
+
+// runInstallFromConfig reads skills.yaml and installs everything declared in it.
+func runInstallFromConfig(opts installer.Options) error {
+	cfg, err := config.Load(globalConfigFile)
+	if err != nil {
+		return err
+	}
+	if len(cfg.Packages) == 0 {
+		fmt.Println("No packages declared in config. Nothing to install.")
+		return nil
+	}
+	return installer.Run(cfg, opts)
+}
+
+// runInstallInteractive resolves the source, detects skills, presents a TUI
+// multi-select, and installs the chosen skills.
+func runInstallInteractive(source string, preselect []string, opts installer.Options) error {
+	// Resolve source to a local directory.
+	sourceDir, isRemote, err := resolveSource(source, opts.StoreDir)
+	if err != nil {
+		return err
+	}
+
+	detected, err := detect.Scan(sourceDir)
+	if err != nil {
+		return fmt.Errorf("detect skills: %w", err)
+	}
+	if len(detected) == 0 {
+		fmt.Println("No skills found in", source)
+		return nil
+	}
+
+	// If skills were given as arguments, validate and use them directly.
+	selectedNames := preselect
+	if len(selectedNames) == 0 {
+		selectedNames, err = selectSkillsTUI(detected)
+		if err != nil {
+			return err
+		}
+	}
+	if len(selectedNames) == 0 {
+		fmt.Println("No skills selected.")
+		return nil
+	}
+
+	// Build a minimal config for the chosen skills.
+	pkg := types.SkillPackageConfig{
+		Skills: selectedNames,
+	}
+	if isRemote {
+		pkg.Repo = source
+	} else {
+		pkg.LocalPath = source
+	}
+
+	cfg := &types.SkmConfig{
+		Packages: []types.SkillPackageConfig{pkg},
+	}
+	return installer.Run(cfg, opts)
+}
+
+// selectSkillsTUI shows a charmbracelet/huh multi-select form and returns the
+// chosen skill names.
+func selectSkillsTUI(skills []types.DetectedSkill) ([]string, error) {
+	options := make([]huh.Option[string], len(skills))
+	for i, s := range skills {
+		label := s.Name
+		if s.Description != "" {
+			label = fmt.Sprintf("%s — %s", s.Name, s.Description)
+		}
+		options[i] = huh.NewOption(label, s.Name)
+	}
+
+	var chosen []string
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewMultiSelect[string]().
+				Title("Select skills to install").
+				Options(options...).
+				Value(&chosen),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		return nil, fmt.Errorf("TUI selection: %w", err)
+	}
+	return chosen, nil
+}
+
+// resolveSource returns the local directory for a source, cloning if needed.
+// isRemote is true when the source was a git repo URL.
+func resolveSource(source, storeDir string) (dir string, isRemote bool, err error) {
+	// Local path check.
+	if strings.HasPrefix(source, "/") || strings.HasPrefix(source, "~/") || strings.HasPrefix(source, "./") {
+		expanded, err := expandPath(source)
+		if err != nil {
+			return "", false, err
+		}
+		return expanded, false, nil
+	}
+
+	// Treat as a git repo.
+	dest := repoStorePath(storeDir, source)
+	if _, statErr := os.Stat(dest); os.IsNotExist(statErr) {
+		fmt.Printf("Cloning %s ...\n", source)
+		if err := git.Clone(source, dest); err != nil {
+			return "", false, err
+		}
+	} else {
+		fmt.Printf("Updating %s ...\n", source)
+		if err := git.Pull(dest); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: git pull failed: %v\n", err)
+		}
+	}
+	return dest, true, nil
+}
+
+// expandPath expands ~ to the home directory.
+func expandPath(p string) (string, error) {
+	if strings.HasPrefix(p, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		p = filepath.Join(home, p[2:])
+	}
+	return filepath.Abs(p)
+}
+
+// repoStorePath mirrors installer.repoStorePath — kept local to avoid export.
+func repoStorePath(storeDir, repo string) string {
+	repo = strings.TrimPrefix(repo, "https://")
+	repo = strings.TrimPrefix(repo, "http://")
+	repo = strings.TrimPrefix(repo, "git@")
+	repo = strings.ReplaceAll(repo, ":", "/")
+	return filepath.Join(storeDir, repo)
+}
