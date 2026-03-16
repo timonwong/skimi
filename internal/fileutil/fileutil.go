@@ -19,15 +19,15 @@ func AtomicWrite(path string, data []byte) error {
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)
-		return fmt.Errorf("write temp file: %w", err)
+		return fmt.Errorf("write %s: %w", path, err)
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpName)
-		return fmt.Errorf("close temp file: %w", err)
+		return fmt.Errorf("close temp for %s: %w", path, err)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		_ = os.Remove(tmpName)
-		return fmt.Errorf("rename temp file: %w", err)
+		return fmt.Errorf("rename to %s: %w", path, err)
 	}
 	return nil
 }

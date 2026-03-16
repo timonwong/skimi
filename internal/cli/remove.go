@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"slices"
 
 	"github.com/spf13/cobra"
 	"github.com/timonwong/skimi/internal/linker"
@@ -25,7 +26,7 @@ func newRemoveCmd() *cobra.Command {
 			var remaining []types.InstalledSkill
 
 			for _, s := range lf.Skills {
-				if !containsString(args, s.Name) {
+				if !slices.Contains(args, s.Name) {
 					remaining = append(remaining, s)
 					continue
 				}
@@ -54,13 +55,4 @@ func newRemoveCmd() *cobra.Command {
 			return nil
 		},
 	}
-}
-
-func containsString(slice []string, s string) bool {
-	for _, v := range slice {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }

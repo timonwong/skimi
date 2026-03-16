@@ -3,9 +3,9 @@ package installer
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/timonwong/skimi/internal/types"
 )
 
@@ -84,25 +84,37 @@ func TestFilterSkills(t *testing.T) {
 	}
 
 	tests := []struct {
-		name     string
-		want     []string
-		wantLen  int
-		wantName string
+		name   string
+		filter []string
+		want   []types.DetectedSkill
 	}{
-		{"subset match", []string{"alpha", "gamma"}, 2, ""},
-		{"single match", []string{"beta"}, 1, "beta"},
-		{"no match", []string{"delta"}, 0, ""},
-		{"empty want", []string{}, 0, ""},
+		{
+			name:   "subset match",
+			filter: []string{"alpha", "gamma"},
+			want:   []types.DetectedSkill{{Name: "alpha"}, {Name: "gamma"}},
+		},
+		{
+			name:   "single match",
+			filter: []string{"beta"},
+			want:   []types.DetectedSkill{{Name: "beta"}},
+		},
+		{
+			name:   "no match",
+			filter: []string{"delta"},
+			want:   nil,
+		},
+		{
+			name:   "empty filter",
+			filter: []string{},
+			want:   nil,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := filterSkills(all, tt.want)
-			if len(got) != tt.wantLen {
-				t.Errorf("filterSkills() len = %d, want %d; got %v", len(got), tt.wantLen, got)
-			}
-			if tt.wantName != "" && len(got) > 0 && got[0].Name != tt.wantName {
-				t.Errorf("filterSkills()[0].Name = %q, want %q", got[0].Name, tt.wantName)
+			got := filterSkills(all, tt.filter)
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("filterSkills() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -129,8 +141,8 @@ func TestResolveDefaultAgents(t *testing.T) {
 		want := []string{types.AgentClaude, types.AgentCodex}
 		cfg := &types.SkmConfig{Agents: &types.DefaultAgentsConfig{Default: want}}
 		got := resolveDefaultAgents(cfg)
-		if strings.Join(got, ",") != strings.Join(want, ",") {
-			t.Errorf("resolveDefaultAgents() = %v, want %v", got, want)
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("resolveDefaultAgents() mismatch (-want +got):\n%s", diff)
 		}
 	})
 }
@@ -177,8 +189,8 @@ func TestResolvePackageAgents(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := resolvePackageAgents(tt.pkg, defaults)
-			if strings.Join(got, ",") != strings.Join(tt.want, ",") {
-				t.Errorf("resolvePackageAgents() = %v, want %v", got, tt.want)
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("resolvePackageAgents() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

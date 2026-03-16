@@ -116,8 +116,7 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 	// Determine commit for repo packages.
 	var commit string
 	if repo != "" {
-		dest := RepoStorePath(opts.StoreDir, repo)
-		commit, _ = git.HeadCommit(dest)
+		commit, _ = git.HeadCommit(sourceDir)
 	}
 
 	// Determine agent list for this package.
