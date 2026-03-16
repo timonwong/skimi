@@ -18,7 +18,18 @@ type ParsedSource struct {
 	Kind      SourceKind
 	Repo      string // normalized repository identifier (e.g., "github.com/owner/repo")
 	Subdir    string // optional sub-directory within the repo
+	CloneURL  string // URL to use for cloning (preserves original protocol); empty means use Repo
 	LocalPath string // absolute or relative local path (only set for SourceLocal)
+}
+
+// GetCloneURL returns the URL to use for git clone operations.
+// If CloneURL is set (for explicit URLs like git@ or https://), it returns that.
+// Otherwise, it returns Repo which will be converted to HTTPS by git.Clone.
+func (p ParsedSource) GetCloneURL() string {
+	if p.CloneURL != "" {
+		return p.CloneURL
+	}
+	return p.Repo
 }
 
 // Parse parses a source string into its components.
@@ -89,8 +100,9 @@ func parseGitSSH(source string) ParsedSource {
 	parts := strings.Split(s, "/")
 	if len(parts) < 3 {
 		return ParsedSource{
-			Kind: SourceRemote,
-			Repo: s,
+			Kind:     SourceRemote,
+			Repo:     s,
+			CloneURL: source, // preserve original SSH URL
 		}
 	}
 
@@ -101,9 +113,10 @@ func parseGitSSH(source string) ParsedSource {
 	}
 
 	return ParsedSource{
-		Kind:   SourceRemote,
-		Repo:   repo,
-		Subdir: subdir,
+		Kind:     SourceRemote,
+		Repo:     repo,
+		Subdir:   subdir,
+		CloneURL: source, // preserve original SSH URL
 	}
 }
 
@@ -119,8 +132,9 @@ func parseHTTPURL(source string) ParsedSource {
 	parts := strings.Split(s, "/")
 	if len(parts) < 3 {
 		return ParsedSource{
-			Kind: SourceRemote,
-			Repo: s,
+			Kind:     SourceRemote,
+			Repo:     s,
+			CloneURL: source, // preserve original URL with protocol
 		}
 	}
 
@@ -131,9 +145,10 @@ func parseHTTPURL(source string) ParsedSource {
 	}
 
 	return ParsedSource{
-		Kind:   SourceRemote,
-		Repo:   repo,
-		Subdir: subdir,
+		Kind:     SourceRemote,
+		Repo:     repo,
+		Subdir:   subdir,
+		CloneURL: source, // preserve original URL with protocol
 	}
 }
 

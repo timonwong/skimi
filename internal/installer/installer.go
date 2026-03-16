@@ -95,7 +95,7 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 
 		repo = parsed.Repo
 		dest := RepoStorePath(opts.StoreDir, parsed.Repo)
-		if err := ensureRepo(parsed.Repo, dest); err != nil {
+		if err := ensureRepo(parsed.GetCloneURL(), dest); err != nil {
 			return nil, err
 		}
 

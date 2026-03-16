@@ -60,7 +60,7 @@ func runInstallFromConfig(opts installer.Options) error {
 // multi-select, and installs the chosen skills.
 func runInstallInteractive(src string, preselect []string, opts installer.Options) error {
 	// Resolve source to a local directory.
-	sourceDir, isRemote, repo, err := resolveSource(src, opts.StoreDir)
+	sourceDir, isRemote, err := resolveSource(src, opts.StoreDir)
 	if err != nil {
 		return err
 	}
@@ -88,11 +88,12 @@ func runInstallInteractive(src string, preselect []string, opts installer.Option
 	}
 
 	// Build a minimal config for the chosen skills.
+	// Use the original src to preserve any subdir information.
 	pkg := types.SkillPackageConfig{
 		Skills: selectedNames,
 	}
 	if isRemote {
-		pkg.Repo = repo
+		pkg.Repo = src
 	} else {
 		pkg.LocalPath = src
 	}
@@ -132,28 +133,27 @@ func selectSkillsTUI(skills []types.DetectedSkill) ([]string, error) {
 }
 
 // resolveSource returns the local directory for a source, cloning if needed.
-// isRemote is true when the source was a git repo. repo is the normalized
-// repository identifier (used for config storage).
-func resolveSource(src, storeDir string) (dir string, isRemote bool, repo string, err error) {
+// isRemote is true when the source was a git repo.
+func resolveSource(src, storeDir string) (dir string, isRemote bool, err error) {
 	parsed, err := source.Parse(src)
 	if err != nil {
-		return "", false, "", err
+		return "", false, err
 	}
 
 	if parsed.Kind == source.SourceLocal {
 		expanded, err := installer.ExpandPath(parsed.LocalPath)
 		if err != nil {
-			return "", false, "", err
+			return "", false, err
 		}
-		return expanded, false, "", nil
+		return expanded, false, nil
 	}
 
 	// Remote repo: clone/update
 	dest := installer.RepoStorePath(storeDir, parsed.Repo)
 	if _, statErr := os.Stat(dest); os.IsNotExist(statErr) {
 		fmt.Printf("Cloning %s ...\n", parsed.Repo)
-		if err := git.Clone(parsed.Repo, dest); err != nil {
-			return "", false, "", err
+		if err := git.Clone(parsed.GetCloneURL(), dest); err != nil {
+			return "", false, err
 		}
 	} else {
 		fmt.Printf("Updating %s ...\n", parsed.Repo)
@@ -167,5 +167,5 @@ func resolveSource(src, storeDir string) (dir string, isRemote bool, repo string
 		dest = filepath.Join(dest, parsed.Subdir)
 	}
 
-	return dest, true, parsed.Repo, nil
+	return dest, true, nil
 }

@@ -78,38 +78,38 @@ func TestParse(t *testing.T) {
 			want:   ParsedSource{Kind: SourceRemote, Repo: "github.com/owner"},
 		},
 
-		// HTTPS URLs
+		// HTTPS URLs - CloneURL should be preserved
 		{
 			name:   "https URL basic",
 			source: "https://github.com/owner/repo",
-			want:   ParsedSource{Kind: SourceRemote, Repo: "github.com/owner/repo"},
+			want:   ParsedSource{Kind: SourceRemote, Repo: "github.com/owner/repo", CloneURL: "https://github.com/owner/repo"},
 		},
 		{
 			name:   "https URL with .git",
 			source: "https://github.com/owner/repo.git",
-			want:   ParsedSource{Kind: SourceRemote, Repo: "github.com/owner/repo"},
+			want:   ParsedSource{Kind: SourceRemote, Repo: "github.com/owner/repo", CloneURL: "https://github.com/owner/repo.git"},
 		},
 		{
 			name:   "https URL with subdir",
 			source: "https://github.com/owner/repo/subdir/path",
-			want:   ParsedSource{Kind: SourceRemote, Repo: "github.com/owner/repo", Subdir: "subdir/path"},
+			want:   ParsedSource{Kind: SourceRemote, Repo: "github.com/owner/repo", Subdir: "subdir/path", CloneURL: "https://github.com/owner/repo/subdir/path"},
 		},
 		{
 			name:   "http URL",
 			source: "http://github.com/owner/repo",
-			want:   ParsedSource{Kind: SourceRemote, Repo: "github.com/owner/repo"},
+			want:   ParsedSource{Kind: SourceRemote, Repo: "github.com/owner/repo", CloneURL: "http://github.com/owner/repo"},
 		},
 
-		// SSH URLs
+		// SSH URLs - CloneURL should preserve the git@ format
 		{
 			name:   "git SSH basic",
 			source: "git@github.com:owner/repo",
-			want:   ParsedSource{Kind: SourceRemote, Repo: "github.com/owner/repo"},
+			want:   ParsedSource{Kind: SourceRemote, Repo: "github.com/owner/repo", CloneURL: "git@github.com:owner/repo"},
 		},
 		{
 			name:   "git SSH with .git",
 			source: "git@github.com:owner/repo.git",
-			want:   ParsedSource{Kind: SourceRemote, Repo: "github.com/owner/repo"},
+			want:   ParsedSource{Kind: SourceRemote, Repo: "github.com/owner/repo", CloneURL: "git@github.com:owner/repo.git"},
 		},
 	}
 
@@ -145,6 +145,39 @@ func TestIsLocalPath(t *testing.T) {
 			got := isLocalPath(tt.source)
 			if got != tt.want {
 				t.Errorf("isLocalPath(%q) = %v, want %v", tt.source, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetCloneURL(t *testing.T) {
+	tests := []struct {
+		name string
+		ps   ParsedSource
+		want string
+	}{
+		{
+			name: "CloneURL set returns CloneURL",
+			ps:   ParsedSource{Repo: "github.com/owner/repo", CloneURL: "git@github.com:owner/repo"},
+			want: "git@github.com:owner/repo",
+		},
+		{
+			name: "CloneURL empty returns Repo",
+			ps:   ParsedSource{Repo: "github.com/owner/repo"},
+			want: "github.com/owner/repo",
+		},
+		{
+			name: "https CloneURL preserved",
+			ps:   ParsedSource{Repo: "github.com/owner/repo", CloneURL: "https://github.com/owner/repo"},
+			want: "https://github.com/owner/repo",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.ps.GetCloneURL()
+			if got != tt.want {
+				t.Errorf("GetCloneURL() = %q, want %q", got, tt.want)
 			}
 		})
 	}
