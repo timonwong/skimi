@@ -56,6 +56,32 @@ packages:
 
 ## Installation
 
+### GitHub Releases (Recommended)
+
+Download the pre-built binary for your platform from the [Releases page](https://github.com/timonwong/skimi/releases/latest), or use one of the commands below:
+
+```bash
+# macOS (Apple Silicon)
+curl -L https://github.com/timonwong/skimi/releases/latest/download/skimi_darwin_arm64.tar.gz | tar xz
+sudo mv skimi /usr/local/bin/
+
+# macOS (Intel)
+curl -L https://github.com/timonwong/skimi/releases/latest/download/skimi_darwin_amd64.tar.gz | tar xz
+sudo mv skimi /usr/local/bin/
+
+# Linux (x86_64)
+curl -L https://github.com/timonwong/skimi/releases/latest/download/skimi_linux_amd64.tar.gz | tar xz
+sudo mv skimi /usr/local/bin/
+
+# Linux (ARM64)
+curl -L https://github.com/timonwong/skimi/releases/latest/download/skimi_linux_arm64.tar.gz | tar xz
+sudo mv skimi /usr/local/bin/
+```
+
+### Install from Source
+
+Requires Go 1.21+:
+
 ```bash
 go install github.com/timonwong/skimi/cmd/skimi@latest
 ```
