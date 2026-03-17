@@ -18,6 +18,7 @@ import (
 
 func newInstallCmd() *cobra.Command {
 	var dryRun bool
+	var verbose bool
 
 	cmd := &cobra.Command{
 		Use:   "install [source [skill...]]",
@@ -31,6 +32,7 @@ skills and lets you select which ones to install interactively.`,
 				StoreDir: globalStoreDir,
 				LockPath: globalLockFile,
 				DryRun:   dryRun,
+				Verbose:  verbose,
 			}
 
 			if len(args) == 0 {
@@ -41,6 +43,7 @@ skills and lets you select which ones to install interactively.`,
 	}
 
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print what would be done without making changes")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "show override notices for existing links")
 	return cmd
 }
 

@@ -10,6 +10,7 @@ import (
 
 func newUpdateCmd() *cobra.Command {
 	var dryRun bool
+	var verbose bool
 
 	cmd := &cobra.Command{
 		Use:   "update",
@@ -28,6 +29,7 @@ func newUpdateCmd() *cobra.Command {
 				StoreDir: globalStoreDir,
 				LockPath: globalLockFile,
 				DryRun:   dryRun,
+				Verbose:  verbose,
 			}
 			// installer.Run already performs git pull before installing.
 			return installer.Run(cfg, opts)
@@ -35,5 +37,6 @@ func newUpdateCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print what would be done without making changes")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "show override notices for existing links")
 	return cmd
 }
