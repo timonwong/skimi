@@ -16,12 +16,12 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/timonwong/skimi/internal/detect"
 	"github.com/timonwong/skimi/internal/types"
+	"github.com/timonwong/skimi/internal/ui"
 )
 
 // ── styles ───────────────────────────────────────────────────────────────────
 
 var (
-	viewStyleDim       = lipgloss.NewStyle().Faint(true)
 	viewStyleCyanBold  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#7DCFFF"))
 	viewStyleDimYellow = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("#E5C07B"))
 	viewStyleDesc      = lipgloss.NewStyle().Faint(true).Foreground(lipgloss.Color("#FFFFFF"))
@@ -77,7 +77,7 @@ func (d skillDelegate) Render(w io.Writer, m list.Model, index int, item list.It
 	} else {
 		fmt.Fprintf(w, "  %s  %s",
 			si.skill.Name,
-			viewStyleDim.Render(si.relPath),
+			ui.Dim.Render(si.relPath),
 		)
 	}
 }
@@ -219,7 +219,7 @@ func (m viewModel) View() string {
 	if m.state == statePager {
 		return m.viewport.View()
 	}
-	sep := viewStyleDim.Render(strings.Repeat("─", m.width))
+	sep := ui.Dim.Render(strings.Repeat("─", m.width))
 	desc := viewStyleDesc.Render(m.focusedDesc)
 	return m.list.View() + "\n" + sep + "\n" + desc
 }

@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 
 	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 	"github.com/timonwong/skimi/internal/config"
 	"github.com/timonwong/skimi/internal/detect"
@@ -14,11 +13,7 @@ import (
 	"github.com/timonwong/skimi/internal/installer"
 	"github.com/timonwong/skimi/internal/source"
 	"github.com/timonwong/skimi/internal/types"
-)
-
-var (
-	installStyleBlue = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
-	installStyleRed  = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	"github.com/timonwong/skimi/internal/ui"
 )
 
 func newInstallCmd() *cobra.Command {
@@ -157,14 +152,14 @@ func resolveSource(src, storeDir string) (dir string, isRemote bool, err error) 
 	// Remote repo: clone/update
 	dest := installer.RepoStorePath(storeDir, parsed.Repo)
 	if _, statErr := os.Stat(dest); os.IsNotExist(statErr) {
-		fmt.Println(installStyleBlue.Render("Using " + parsed.Repo))
+		fmt.Println(ui.Blue.Render("Using " + parsed.Repo))
 		if err := git.Clone(parsed.GetCloneURL(), dest); err != nil {
 			return "", false, err
 		}
 	} else {
-		fmt.Println(installStyleBlue.Render("Using existing " + parsed.Repo))
+		fmt.Println(ui.Blue.Render("Using existing " + parsed.Repo))
 		if err := git.Pull(dest); err != nil {
-			fmt.Fprintln(os.Stderr, installStyleRed.Render("  Warning: git pull failed: "+err.Error()))
+			fmt.Fprintln(os.Stderr, ui.Red.Render("  Warning: git pull failed: "+err.Error()))
 		}
 	}
 

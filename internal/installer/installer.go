@@ -6,21 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/timonwong/skimi/internal/detect"
 	"github.com/timonwong/skimi/internal/git"
 	"github.com/timonwong/skimi/internal/linker"
 	"github.com/timonwong/skimi/internal/lock"
 	"github.com/timonwong/skimi/internal/source"
 	"github.com/timonwong/skimi/internal/types"
-)
-
-var (
-	styleBlue    = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
-	styleDim     = lipgloss.NewStyle().Faint(true)
-	styleYellow  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	styleMagenta = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
-	styleRed     = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	"github.com/timonwong/skimi/internal/ui"
 )
 
 // Options controls the behaviour of Run.
@@ -72,7 +64,7 @@ func Run(cfg *types.SkmConfig, opts Options) error {
 		if !opts.DryRun {
 			for _, link := range links {
 				if err := linker.RemoveLink(link); err != nil {
-					fmt.Fprintln(os.Stderr, styleRed.Render("  Warning: remove link "+link+": "+err.Error()))
+					fmt.Fprintln(os.Stderr, ui.Red.Render("  Warning: remove link "+link+": "+err.Error()))
 				}
 			}
 		}
@@ -110,9 +102,9 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 
 		_, statErr := os.Stat(dest)
 		if os.IsNotExist(statErr) {
-			fmt.Println(styleBlue.Render("Using " + repo))
+			fmt.Println(ui.Blue.Render("Using " + repo))
 		} else {
-			fmt.Println(styleBlue.Render("Using existing " + repo))
+			fmt.Println(ui.Blue.Render("Using existing " + repo))
 		}
 
 		if err := ensureRepo(parsed.GetCloneURL(), dest); err != nil {
@@ -132,7 +124,7 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 			return nil, err
 		}
 		sourceDir = expanded
-		fmt.Println(styleBlue.Render("Using local path " + pkg.LocalPath))
+		fmt.Println(ui.Blue.Render("Using local path " + pkg.LocalPath))
 
 	default:
 		return nil, fmt.Errorf("package has neither repo nor local_path")
@@ -153,7 +145,7 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 	for i, s := range detected {
 		skillNames[i] = s.Name
 	}
-	fmt.Println(styleDim.Render("  Found skills: " + strings.Join(skillNames, ", ")))
+	fmt.Println(ui.Dim.Render("  Found skills: " + strings.Join(skillNames, ", ")))
 
 	// Determine commit for repo packages.
 	var commit string
@@ -167,7 +159,7 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 	var installed []types.InstalledSkill
 
 	for _, skill := range detected {
-		fmt.Println(styleYellow.Render("  Install skill " + skill.Name))
+		fmt.Println(ui.Yellow.Render("  Install skill " + skill.Name))
 		links, err := linkSkill(skill, agents, pkg.TargetDir, opts.DryRun)
 		if err != nil {
 			return nil, err
@@ -200,23 +192,28 @@ func linkSkill(skill types.DetectedSkill, agents []string, targetDir string, dry
 		if err != nil {
 			return nil, err
 		}
-		_, lstatErr := os.Lstat(dstPath)
-		exists := lstatErr == nil
 		if dryRun {
-			fmt.Println(styleDim.Render("  Skipped " + skill.Name + " -> [" + agent + "] " + shortPath(dstPath)))
+			fmt.Println(ui.Dim.Render(linkLine("Skipped", skill.Name, agent, dstPath)))
 		} else {
+			_, lstatErr := os.Lstat(dstPath)
+			exists := lstatErr == nil
 			if err := linker.CreateLink(skill.SkillPath, dstPath, agent); err != nil {
 				return nil, fmt.Errorf("create link for %s in agent %s: %w", skill.Name, agent, err)
 			}
 			if exists {
-				fmt.Println(styleMagenta.Render("  Overriding " + skill.Name + " -> [" + agent + "] " + shortPath(dstPath)))
+				fmt.Println(ui.Magenta.Render(linkLine("Overriding", skill.Name, agent, dstPath)))
 			} else {
-				fmt.Println("  Linked " + skill.Name + " -> [" + agent + "] " + shortPath(dstPath))
+				fmt.Println(linkLine("Linked", skill.Name, agent, dstPath))
 			}
 		}
 		links = append(links, dstPath)
 	}
 	return links, nil
+}
+
+// linkLine formats a link status line: "  <verb> <skill> -> [<agent>] <path>".
+func linkLine(verb, skillName, agent, dstPath string) string {
+	return fmt.Sprintf("  %s %s -> [%s] %s", verb, skillName, agent, shortPath(dstPath))
 }
 
 // ensureRepo clones the repo if dest does not exist, or pulls if it does.
