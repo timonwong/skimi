@@ -89,8 +89,9 @@ func parseURL(source string) ParsedSource {
 // parseGitSSH parses git@host:owner/repo.git format.
 func parseGitSSH(source string) ParsedSource {
 	// git@github.com:owner/repo.git → github.com/owner/repo
-	// git@github.com:owner/repo → github.com/owner/repo
 	s := strings.TrimPrefix(source, "git@")
+
+	hasDotGit := strings.HasSuffix(s, ".git")
 	s = strings.TrimSuffix(s, ".git")
 
 	// Replace : with /
@@ -102,7 +103,7 @@ func parseGitSSH(source string) ParsedSource {
 		return ParsedSource{
 			Kind:     SourceRemote,
 			Repo:     s,
-			CloneURL: source, // preserve original SSH URL
+			CloneURL: source,
 		}
 	}
 
@@ -112,20 +113,35 @@ func parseGitSSH(source string) ParsedSource {
 		subdir = strings.Join(parts[3:], "/")
 	}
 
+	// Rebuild CloneURL without subdir: git@host:owner/repo[.git]
+	cloneURL := "git@" + parts[0] + ":" + strings.Join(parts[1:3], "/")
+	if hasDotGit {
+		cloneURL += ".git"
+	}
+
 	return ParsedSource{
 		Kind:     SourceRemote,
 		Repo:     repo,
 		Subdir:   subdir,
-		CloneURL: source, // preserve original SSH URL
+		CloneURL: cloneURL,
 	}
 }
 
 // parseHTTPURL parses http(s)://host/owner/repo paths.
 func parseHTTPURL(source string) ParsedSource {
-	// Remove protocol
+	// Extract and preserve protocol
+	protocol := ""
 	s := source
-	s = strings.TrimPrefix(s, "https://")
-	s = strings.TrimPrefix(s, "http://")
+	switch {
+	case strings.HasPrefix(s, "https://"):
+		protocol = "https://"
+		s = strings.TrimPrefix(s, "https://")
+	case strings.HasPrefix(s, "http://"):
+		protocol = "http://"
+		s = strings.TrimPrefix(s, "http://")
+	}
+
+	hasDotGit := strings.HasSuffix(s, ".git")
 	s = strings.TrimSuffix(s, ".git")
 
 	// Split and take first 3 segments (host/owner/repo)
@@ -134,7 +150,7 @@ func parseHTTPURL(source string) ParsedSource {
 		return ParsedSource{
 			Kind:     SourceRemote,
 			Repo:     s,
-			CloneURL: source, // preserve original URL with protocol
+			CloneURL: source,
 		}
 	}
 
@@ -144,11 +160,17 @@ func parseHTTPURL(source string) ParsedSource {
 		subdir = strings.Join(parts[3:], "/")
 	}
 
+	// Build CloneURL without subdir so git.Clone targets only the repo
+	cloneURL := protocol + repo
+	if hasDotGit {
+		cloneURL += ".git"
+	}
+
 	return ParsedSource{
 		Kind:     SourceRemote,
 		Repo:     repo,
 		Subdir:   subdir,
-		CloneURL: source, // preserve original URL with protocol
+		CloneURL: cloneURL,
 	}
 }
 

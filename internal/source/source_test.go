@@ -78,7 +78,7 @@ func TestParse(t *testing.T) {
 			want:   ParsedSource{Kind: SourceRemote, Repo: "github.com/owner"},
 		},
 
-		// HTTPS URLs - CloneURL should be preserved
+		// HTTPS URLs - CloneURL should be repo-only (no subdir)
 		{
 			name:   "https URL basic",
 			source: "https://github.com/owner/repo",
@@ -90,9 +90,9 @@ func TestParse(t *testing.T) {
 			want:   ParsedSource{Kind: SourceRemote, Repo: "github.com/owner/repo", CloneURL: "https://github.com/owner/repo.git"},
 		},
 		{
-			name:   "https URL with subdir",
+			name:   "https URL with subdir — CloneURL excludes subdir",
 			source: "https://github.com/owner/repo/subdir/path",
-			want:   ParsedSource{Kind: SourceRemote, Repo: "github.com/owner/repo", Subdir: "subdir/path", CloneURL: "https://github.com/owner/repo/subdir/path"},
+			want:   ParsedSource{Kind: SourceRemote, Repo: "github.com/owner/repo", Subdir: "subdir/path", CloneURL: "https://github.com/owner/repo"},
 		},
 		{
 			name:   "http URL",
@@ -100,7 +100,7 @@ func TestParse(t *testing.T) {
 			want:   ParsedSource{Kind: SourceRemote, Repo: "github.com/owner/repo", CloneURL: "http://github.com/owner/repo"},
 		},
 
-		// SSH URLs - CloneURL should preserve the git@ format
+		// SSH URLs - CloneURL should be repo-only (no subdir), preserving git@ format
 		{
 			name:   "git SSH basic",
 			source: "git@github.com:owner/repo",
