@@ -6,12 +6,21 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/timonwong/skimi/internal/detect"
 	"github.com/timonwong/skimi/internal/git"
 	"github.com/timonwong/skimi/internal/linker"
 	"github.com/timonwong/skimi/internal/lock"
 	"github.com/timonwong/skimi/internal/source"
 	"github.com/timonwong/skimi/internal/types"
+)
+
+var (
+	styleBlue    = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
+	styleDim     = lipgloss.NewStyle().Faint(true)
+	styleYellow  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	styleMagenta = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
+	styleRed     = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 )
 
 // Options controls the behaviour of Run.
@@ -38,7 +47,10 @@ func Run(cfg *types.SkmConfig, opts Options) error {
 
 	var newSkills []types.InstalledSkill
 
-	for _, pkg := range cfg.Packages {
+	for i, pkg := range cfg.Packages {
+		if i > 0 {
+			fmt.Println()
+		}
 		installed, err := installPackage(pkg, defaultAgents, opts)
 		if err != nil {
 			return err
@@ -60,7 +72,7 @@ func Run(cfg *types.SkmConfig, opts Options) error {
 		if !opts.DryRun {
 			for _, link := range links {
 				if err := linker.RemoveLink(link); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: remove link %s: %v\n", link, err)
+					fmt.Fprintln(os.Stderr, styleRed.Render("  Warning: remove link "+link+": "+err.Error()))
 				}
 			}
 		}
@@ -95,6 +107,14 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 
 		repo = parsed.Repo
 		dest := RepoStorePath(opts.StoreDir, parsed.Repo)
+
+		_, statErr := os.Stat(dest)
+		if os.IsNotExist(statErr) {
+			fmt.Println(styleBlue.Render("Using " + repo))
+		} else {
+			fmt.Println(styleBlue.Render("Using existing " + repo))
+		}
+
 		if err := ensureRepo(parsed.GetCloneURL(), dest); err != nil {
 			return nil, err
 		}
@@ -112,6 +132,7 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 			return nil, err
 		}
 		sourceDir = expanded
+		fmt.Println(styleBlue.Render("Using local path " + pkg.LocalPath))
 
 	default:
 		return nil, fmt.Errorf("package has neither repo nor local_path")
@@ -128,6 +149,12 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 		detected = filterSkills(detected, pkg.Skills)
 	}
 
+	skillNames := make([]string, len(detected))
+	for i, s := range detected {
+		skillNames[i] = s.Name
+	}
+	fmt.Println(styleDim.Render("  Found skills: " + strings.Join(skillNames, ", ")))
+
 	// Determine commit for repo packages.
 	var commit string
 	if repo != "" {
@@ -140,6 +167,7 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 	var installed []types.InstalledSkill
 
 	for _, skill := range detected {
+		fmt.Println(styleYellow.Render("  Install skill " + skill.Name))
 		links, err := linkSkill(skill, agents, pkg.TargetDir, opts.DryRun)
 		if err != nil {
 			return nil, err
@@ -159,7 +187,6 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 		}
 
 		installed = append(installed, entry)
-		fmt.Printf("Installed skill %q → %s\n", skill.Name, strings.Join(links, ", "))
 	}
 
 	return installed, nil
@@ -173,11 +200,18 @@ func linkSkill(skill types.DetectedSkill, agents []string, targetDir string, dry
 		if err != nil {
 			return nil, err
 		}
+		_, lstatErr := os.Lstat(dstPath)
+		exists := lstatErr == nil
 		if dryRun {
-			fmt.Printf("  [dry-run] link %s → %s\n", skill.SkillPath, dstPath)
+			fmt.Println(styleDim.Render("  Skipped " + skill.Name + " -> [" + agent + "] " + shortPath(dstPath)))
 		} else {
 			if err := linker.CreateLink(skill.SkillPath, dstPath, agent); err != nil {
 				return nil, fmt.Errorf("create link for %s in agent %s: %w", skill.Name, agent, err)
+			}
+			if exists {
+				fmt.Println(styleMagenta.Render("  Overriding " + skill.Name + " -> [" + agent + "] " + shortPath(dstPath)))
+			} else {
+				fmt.Println("  Linked " + skill.Name + " -> [" + agent + "] " + shortPath(dstPath))
 			}
 		}
 		links = append(links, dstPath)
@@ -188,11 +222,18 @@ func linkSkill(skill types.DetectedSkill, agents []string, targetDir string, dry
 // ensureRepo clones the repo if dest does not exist, or pulls if it does.
 func ensureRepo(repo, dest string) error {
 	if _, err := os.Stat(dest); os.IsNotExist(err) {
-		fmt.Printf("Cloning %s ...\n", repo)
 		return git.Clone(repo, dest)
 	}
-	fmt.Printf("Updating %s ...\n", repo)
 	return git.Pull(dest)
+}
+
+// shortPath replaces the home directory prefix with ~.
+func shortPath(p string) string {
+	home, _ := os.UserHomeDir()
+	if home != "" && strings.HasPrefix(p, home) {
+		return "~" + p[len(home):]
+	}
+	return p
 }
 
 // RepoStorePath converts a repo identifier to its path inside the store dir.
