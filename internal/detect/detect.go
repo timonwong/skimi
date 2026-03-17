@@ -22,23 +22,22 @@ const skillFile = "SKILL.md"
 // skill name found; when duplicates exist the shallowest path wins.
 func Scan(rootDir string) ([]types.DetectedSkill, error) {
 	// Priority: check for skills/ subdirectory first
-	skillsDir := filepath.Join(rootDir, "skills")
-	info, err := os.Stat(skillsDir)
-	if err == nil && info.IsDir() {
-		// skills/ directory exists — scan within it
-		var raw []types.DetectedSkill
-		if err := walk(skillsDir, skillsDir, &raw); err != nil {
-			return nil, err
-		}
-		return deduplicateSkills(raw, skillsDir), nil
+	scanDir := rootDir
+	if skillsDir := filepath.Join(rootDir, "skills"); isDir(skillsDir) {
+		scanDir = skillsDir
 	}
 
-	// No skills/ directory — scan rootDir subdirectories directly
 	var raw []types.DetectedSkill
-	if err := walk(rootDir, rootDir, &raw); err != nil {
+	if err := walk(scanDir, scanDir, &raw); err != nil {
 		return nil, err
 	}
-	return deduplicateSkills(raw, rootDir), nil
+	return deduplicateSkills(raw, scanDir), nil
+}
+
+// isDir reports whether path is a directory.
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // deduplicateSkills returns skills with duplicate names removed, keeping the
