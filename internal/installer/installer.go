@@ -20,6 +20,7 @@ type Options struct {
 	StoreDir string // root directory for cloned repos
 	LockPath string // path to the lock file
 	DryRun   bool   // print what would be done without making changes
+	Verbose  bool   // print extra detail such as override notices
 }
 
 // Run installs all packages declared in cfg and updates the lock file.
@@ -160,7 +161,7 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 
 	for _, skill := range detected {
 		fmt.Println(ui.Yellow.Render("  Install skill " + skill.Name))
-		links, err := linkSkill(skill, agents, pkg.TargetDir, opts.DryRun)
+		links, err := linkSkill(skill, agents, pkg.TargetDir, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -185,26 +186,28 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 }
 
 // linkSkill creates links for skill in each agent's skills directory.
-func linkSkill(skill types.DetectedSkill, agents []string, targetDir string, dryRun bool) ([]string, error) {
+func linkSkill(skill types.DetectedSkill, agents []string, targetDir string, opts Options) ([]string, error) {
 	var links []string
 	for _, agent := range agents {
 		dstPath, err := linker.SkillLinkPath(agent, targetDir, skill.Name)
 		if err != nil {
 			return nil, err
 		}
-		if dryRun {
+		if opts.DryRun {
 			fmt.Println(ui.Dim.Render(linkLine("Skipped", skill.Name, agent, dstPath)))
 		} else {
-			_, lstatErr := os.Lstat(dstPath)
-			exists := lstatErr == nil
+			var exists bool
+			if opts.Verbose {
+				_, lstatErr := os.Lstat(dstPath)
+				exists = lstatErr == nil
+			}
 			if err := linker.CreateLink(skill.SkillPath, dstPath, agent); err != nil {
 				return nil, fmt.Errorf("create link for %s in agent %s: %w", skill.Name, agent, err)
 			}
 			if exists {
 				fmt.Println(ui.Magenta.Render(linkLine("Overriding", skill.Name, agent, dstPath)))
-			} else {
-				fmt.Println(linkLine("Linked", skill.Name, agent, dstPath))
 			}
+			fmt.Println(linkLine("Linked", skill.Name, agent, dstPath))
 		}
 		links = append(links, dstPath)
 	}
