@@ -12,6 +12,7 @@ import (
 	"github.com/timonwong/skimi/internal/lock"
 	"github.com/timonwong/skimi/internal/source"
 	"github.com/timonwong/skimi/internal/types"
+	"github.com/timonwong/skimi/internal/ui"
 )
 
 // Options controls the behaviour of Run.
@@ -38,7 +39,10 @@ func Run(cfg *types.SkmConfig, opts Options) error {
 
 	var newSkills []types.InstalledSkill
 
-	for _, pkg := range cfg.Packages {
+	for i, pkg := range cfg.Packages {
+		if i > 0 {
+			fmt.Println()
+		}
 		installed, err := installPackage(pkg, defaultAgents, opts)
 		if err != nil {
 			return err
@@ -60,7 +64,7 @@ func Run(cfg *types.SkmConfig, opts Options) error {
 		if !opts.DryRun {
 			for _, link := range links {
 				if err := linker.RemoveLink(link); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: remove link %s: %v\n", link, err)
+					fmt.Fprintln(os.Stderr, ui.Red.Render("  Warning: remove link "+link+": "+err.Error()))
 				}
 			}
 		}
@@ -95,6 +99,14 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 
 		repo = parsed.Repo
 		dest := RepoStorePath(opts.StoreDir, parsed.Repo)
+
+		_, statErr := os.Stat(dest)
+		if os.IsNotExist(statErr) {
+			fmt.Println(ui.Blue.Render("Using " + repo))
+		} else {
+			fmt.Println(ui.Blue.Render("Using existing " + repo))
+		}
+
 		if err := ensureRepo(parsed.GetCloneURL(), dest); err != nil {
 			return nil, err
 		}
@@ -112,6 +124,7 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 			return nil, err
 		}
 		sourceDir = expanded
+		fmt.Println(ui.Blue.Render("Using local path " + pkg.LocalPath))
 
 	default:
 		return nil, fmt.Errorf("package has neither repo nor local_path")
@@ -128,6 +141,12 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 		detected = filterSkills(detected, pkg.Skills)
 	}
 
+	skillNames := make([]string, len(detected))
+	for i, s := range detected {
+		skillNames[i] = s.Name
+	}
+	fmt.Println(ui.Dim.Render("  Found skills: " + strings.Join(skillNames, ", ")))
+
 	// Determine commit for repo packages.
 	var commit string
 	if repo != "" {
@@ -140,6 +159,7 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 	var installed []types.InstalledSkill
 
 	for _, skill := range detected {
+		fmt.Println(ui.Yellow.Render("  Install skill " + skill.Name))
 		links, err := linkSkill(skill, agents, pkg.TargetDir, opts.DryRun)
 		if err != nil {
 			return nil, err
@@ -159,7 +179,6 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 		}
 
 		installed = append(installed, entry)
-		fmt.Printf("Installed skill %q → %s\n", skill.Name, strings.Join(links, ", "))
 	}
 
 	return installed, nil
@@ -174,10 +193,17 @@ func linkSkill(skill types.DetectedSkill, agents []string, targetDir string, dry
 			return nil, err
 		}
 		if dryRun {
-			fmt.Printf("  [dry-run] link %s → %s\n", skill.SkillPath, dstPath)
+			fmt.Println(ui.Dim.Render(linkLine("Skipped", skill.Name, agent, dstPath)))
 		} else {
+			_, lstatErr := os.Lstat(dstPath)
+			exists := lstatErr == nil
 			if err := linker.CreateLink(skill.SkillPath, dstPath, agent); err != nil {
 				return nil, fmt.Errorf("create link for %s in agent %s: %w", skill.Name, agent, err)
+			}
+			if exists {
+				fmt.Println(ui.Magenta.Render(linkLine("Overriding", skill.Name, agent, dstPath)))
+			} else {
+				fmt.Println(linkLine("Linked", skill.Name, agent, dstPath))
 			}
 		}
 		links = append(links, dstPath)
@@ -185,14 +211,26 @@ func linkSkill(skill types.DetectedSkill, agents []string, targetDir string, dry
 	return links, nil
 }
 
+// linkLine formats a link status line: "  <verb> <skill> -> [<agent>] <path>".
+func linkLine(verb, skillName, agent, dstPath string) string {
+	return fmt.Sprintf("  %s %s -> [%s] %s", verb, skillName, agent, shortPath(dstPath))
+}
+
 // ensureRepo clones the repo if dest does not exist, or pulls if it does.
 func ensureRepo(repo, dest string) error {
 	if _, err := os.Stat(dest); os.IsNotExist(err) {
-		fmt.Printf("Cloning %s ...\n", repo)
 		return git.Clone(repo, dest)
 	}
-	fmt.Printf("Updating %s ...\n", repo)
 	return git.Pull(dest)
+}
+
+// shortPath replaces the home directory prefix with ~.
+func shortPath(p string) string {
+	home, _ := os.UserHomeDir()
+	if home != "" && strings.HasPrefix(p, home) {
+		return "~" + p[len(home):]
+	}
+	return p
 }
 
 // RepoStorePath converts a repo identifier to its path inside the store dir.

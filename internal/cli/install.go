@@ -13,6 +13,7 @@ import (
 	"github.com/timonwong/skimi/internal/installer"
 	"github.com/timonwong/skimi/internal/source"
 	"github.com/timonwong/skimi/internal/types"
+	"github.com/timonwong/skimi/internal/ui"
 )
 
 func newInstallCmd() *cobra.Command {
@@ -151,14 +152,14 @@ func resolveSource(src, storeDir string) (dir string, isRemote bool, err error) 
 	// Remote repo: clone/update
 	dest := installer.RepoStorePath(storeDir, parsed.Repo)
 	if _, statErr := os.Stat(dest); os.IsNotExist(statErr) {
-		fmt.Printf("Cloning %s ...\n", parsed.Repo)
+		fmt.Println(ui.Blue.Render("Using " + parsed.Repo))
 		if err := git.Clone(parsed.GetCloneURL(), dest); err != nil {
 			return "", false, err
 		}
 	} else {
-		fmt.Printf("Updating %s ...\n", parsed.Repo)
+		fmt.Println(ui.Blue.Render("Using existing " + parsed.Repo))
 		if err := git.Pull(dest); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: git pull failed: %v\n", err)
+			fmt.Fprintln(os.Stderr, ui.Red.Render("  Warning: git pull failed: "+err.Error()))
 		}
 	}
 
