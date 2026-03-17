@@ -71,9 +71,29 @@ func TestScan(t *testing.T) {
 		}
 	})
 
+	t.Run("no skills directory returns empty", func(t *testing.T) {
+		dir := t.TempDir()
+		// Create a SKILL.md outside of skills/ — should not be found
+		skillDir := filepath.Join(dir, "my-skill")
+		if err := os.MkdirAll(skillDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# Skill"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		got, err := Scan(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 0 {
+			t.Errorf("expected empty (no skills/ dir), got %v", got)
+		}
+	})
+
 	t.Run("single skill with frontmatter name", func(t *testing.T) {
 		dir := t.TempDir()
-		skillDir := filepath.Join(dir, "my-skill")
+		skillDir := filepath.Join(dir, "skills", "my-skill")
 		if err := os.MkdirAll(skillDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -96,7 +116,7 @@ func TestScan(t *testing.T) {
 
 	t.Run("single skill without frontmatter name uses dir name", func(t *testing.T) {
 		dir := t.TempDir()
-		skillDir := filepath.Join(dir, "my-skill")
+		skillDir := filepath.Join(dir, "skills", "my-skill")
 		if err := os.MkdirAll(skillDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -119,7 +139,7 @@ func TestScan(t *testing.T) {
 	t.Run("multiple skills at same level", func(t *testing.T) {
 		dir := t.TempDir()
 		for _, name := range []string{"skill-a", "skill-b"} {
-			skillDir := filepath.Join(dir, name)
+			skillDir := filepath.Join(dir, "skills", name)
 			if err := os.MkdirAll(skillDir, 0o755); err != nil {
 				t.Fatal(err)
 			}
@@ -140,7 +160,7 @@ func TestScan(t *testing.T) {
 
 	t.Run("nested: does not descend into skill dir", func(t *testing.T) {
 		dir := t.TempDir()
-		outerDir := filepath.Join(dir, "outer")
+		outerDir := filepath.Join(dir, "skills", "outer")
 		if err := os.MkdirAll(outerDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -171,7 +191,7 @@ func TestScan(t *testing.T) {
 	t.Run("nested: descends when no SKILL.md at intermediate level", func(t *testing.T) {
 		dir := t.TempDir()
 		// no SKILL.md in intermediate "group" dir
-		deepDir := filepath.Join(dir, "group", "deep-skill")
+		deepDir := filepath.Join(dir, "skills", "group", "deep-skill")
 		if err := os.MkdirAll(deepDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -194,8 +214,8 @@ func TestScan(t *testing.T) {
 	t.Run("deduplication: same name at different depths", func(t *testing.T) {
 		dir := t.TempDir()
 
-		// Shallow: planning-with-files/SKILL.md (depth 1)
-		shallowDir := filepath.Join(dir, "planning-with-files")
+		// Shallow: skills/planning-with-files/SKILL.md (depth 1)
+		shallowDir := filepath.Join(dir, "skills", "planning-with-files")
 		if err := os.MkdirAll(shallowDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -203,8 +223,8 @@ func TestScan(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Deep: group/planning-with-files/SKILL.md (depth 2)
-		deepDir := filepath.Join(dir, "group", "planning-with-files")
+		// Deep: skills/group/planning-with-files/SKILL.md (depth 2)
+		deepDir := filepath.Join(dir, "skills", "group", "planning-with-files")
 		if err := os.MkdirAll(deepDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -221,6 +241,22 @@ func TestScan(t *testing.T) {
 		}
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("Scan() mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("skills directory is a file not directory", func(t *testing.T) {
+		dir := t.TempDir()
+		// Create skills as a file, not a directory
+		if err := os.WriteFile(filepath.Join(dir, "skills"), []byte("not a directory"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		got, err := Scan(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 0 {
+			t.Errorf("expected empty (skills is a file), got %v", got)
 		}
 	})
 }

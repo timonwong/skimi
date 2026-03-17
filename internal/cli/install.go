@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
-	"strings"
+	"path/filepath"
 
 	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
@@ -11,6 +11,7 @@ import (
 	"github.com/timonwong/skimi/internal/detect"
 	"github.com/timonwong/skimi/internal/git"
 	"github.com/timonwong/skimi/internal/installer"
+	"github.com/timonwong/skimi/internal/source"
 	"github.com/timonwong/skimi/internal/types"
 )
 
@@ -57,9 +58,9 @@ func runInstallFromConfig(opts installer.Options) error {
 
 // runInstallInteractive resolves the source, detects skills, presents a TUI
 // multi-select, and installs the chosen skills.
-func runInstallInteractive(source string, preselect []string, opts installer.Options) error {
+func runInstallInteractive(src string, preselect []string, opts installer.Options) error {
 	// Resolve source to a local directory.
-	sourceDir, isRemote, err := resolveSource(source, opts.StoreDir)
+	sourceDir, isRemote, err := resolveSource(src, opts.StoreDir)
 	if err != nil {
 		return err
 	}
@@ -69,7 +70,7 @@ func runInstallInteractive(source string, preselect []string, opts installer.Opt
 		return fmt.Errorf("detect skills: %w", err)
 	}
 	if len(detected) == 0 {
-		fmt.Println("No skills found in", source)
+		fmt.Println("No skills found in", src)
 		return nil
 	}
 
@@ -87,13 +88,14 @@ func runInstallInteractive(source string, preselect []string, opts installer.Opt
 	}
 
 	// Build a minimal config for the chosen skills.
+	// Use the original src to preserve any subdir information.
 	pkg := types.SkillPackageConfig{
 		Skills: selectedNames,
 	}
 	if isRemote {
-		pkg.Repo = source
+		pkg.Repo = src
 	} else {
-		pkg.LocalPath = source
+		pkg.LocalPath = src
 	}
 
 	cfg := &types.SkmConfig{
@@ -131,29 +133,39 @@ func selectSkillsTUI(skills []types.DetectedSkill) ([]string, error) {
 }
 
 // resolveSource returns the local directory for a source, cloning if needed.
-// isRemote is true when the source was a git repo URL.
-func resolveSource(source, storeDir string) (dir string, isRemote bool, err error) {
-	// Local path check.
-	if strings.HasPrefix(source, "/") || strings.HasPrefix(source, "~/") || strings.HasPrefix(source, "./") || strings.HasPrefix(source, "../") {
-		expanded, err := installer.ExpandPath(source)
+// isRemote is true when the source was a git repo.
+func resolveSource(src, storeDir string) (dir string, isRemote bool, err error) {
+	parsed, err := source.Parse(src)
+	if err != nil {
+		return "", false, err
+	}
+
+	if parsed.Kind == source.SourceLocal {
+		expanded, err := installer.ExpandPath(parsed.LocalPath)
 		if err != nil {
 			return "", false, err
 		}
 		return expanded, false, nil
 	}
 
-	// Treat as a git repo.
-	dest := installer.RepoStorePath(storeDir, source)
+	// Remote repo: clone/update
+	dest := installer.RepoStorePath(storeDir, parsed.Repo)
 	if _, statErr := os.Stat(dest); os.IsNotExist(statErr) {
-		fmt.Printf("Cloning %s ...\n", source)
-		if err := git.Clone(source, dest); err != nil {
+		fmt.Printf("Cloning %s ...\n", parsed.Repo)
+		if err := git.Clone(parsed.GetCloneURL(), dest); err != nil {
 			return "", false, err
 		}
 	} else {
-		fmt.Printf("Updating %s ...\n", source)
+		fmt.Printf("Updating %s ...\n", parsed.Repo)
 		if err := git.Pull(dest); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: git pull failed: %v\n", err)
 		}
 	}
+
+	// Apply subdir if specified
+	if parsed.Subdir != "" {
+		dest = filepath.Join(dest, parsed.Subdir)
+	}
+
 	return dest, true, nil
 }
