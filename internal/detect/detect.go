@@ -14,9 +14,11 @@ import (
 
 const skillFile = "SKILL.md"
 
-// Scan looks for SKILL.md files in subdirectories.
+// Scan looks for SKILL.md files.
 // Priority: if rootDir contains a skills/ subdirectory, scan only within it.
-// Otherwise, scan subdirectories of rootDir directly.
+// Otherwise, scan rootDir directly.
+// If the scan directory itself contains SKILL.md, it is returned as a single skill.
+// Otherwise, subdirectories are scanned recursively.
 // When a SKILL.md is found the walk does not descend further into that
 // directory (matching skm behaviour). Returns one DetectedSkill per unique
 // skill name found; when duplicates exist the shallowest path wins.
@@ -27,6 +29,18 @@ func Scan(rootDir string) ([]types.DetectedSkill, error) {
 		scanDir = skillsDir
 	}
 
+	// Check if scanDir itself contains a SKILL.md
+	skillMD := filepath.Join(scanDir, skillFile)
+	if _, err := os.Stat(skillMD); err == nil {
+		// scanDir itself is a skill — return it directly
+		skill, err := parseSkillMD(skillMD, scanDir)
+		if err != nil {
+			return nil, err
+		}
+		return []types.DetectedSkill{skill}, nil
+	}
+
+	// Otherwise, scan subdirectories
 	var raw []types.DetectedSkill
 	if err := walk(scanDir, scanDir, &raw); err != nil {
 		return nil, err

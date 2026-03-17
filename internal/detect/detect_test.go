@@ -71,6 +71,25 @@ func TestScan(t *testing.T) {
 		}
 	})
 
+	t.Run("SKILL.md directly in rootDir", func(t *testing.T) {
+		dir := t.TempDir()
+		// Create a SKILL.md directly in rootDir (no subdirectory)
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: root-skill\ndescription: A root skill\n---\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		got, err := Scan(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []types.DetectedSkill{
+			{Name: "root-skill", Description: "A root skill", SkillPath: dir},
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("Scan() mismatch (-want +got):\n%s", diff)
+		}
+	})
+
 	t.Run("no skills directory - finds skill in subdirectory", func(t *testing.T) {
 		dir := t.TempDir()
 		// Create a SKILL.md in a subdirectory (no skills/ dir)
