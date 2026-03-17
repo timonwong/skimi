@@ -71,14 +71,14 @@ func TestScan(t *testing.T) {
 		}
 	})
 
-	t.Run("no skills directory returns empty", func(t *testing.T) {
+	t.Run("no skills directory - finds skill in subdirectory", func(t *testing.T) {
 		dir := t.TempDir()
-		// Create a SKILL.md outside of skills/ — should not be found
+		// Create a SKILL.md in a subdirectory (no skills/ dir)
 		skillDir := filepath.Join(dir, "my-skill")
 		if err := os.MkdirAll(skillDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# Skill"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: my-skill\n---\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 
@@ -86,8 +86,67 @@ func TestScan(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(got) != 0 {
-			t.Errorf("expected empty (no skills/ dir), got %v", got)
+		want := []types.DetectedSkill{
+			{Name: "my-skill", SkillPath: skillDir},
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("Scan() mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("no skills directory - nested skill found", func(t *testing.T) {
+		dir := t.TempDir()
+		// Create a nested structure without skills/ dir
+		skillDir := filepath.Join(dir, "group", "nested-skill")
+		if err := os.MkdirAll(skillDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: nested\n---\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		got, err := Scan(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []types.DetectedSkill{
+			{Name: "nested", SkillPath: skillDir},
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("Scan() mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("skills directory takes priority over root subdirectories", func(t *testing.T) {
+		dir := t.TempDir()
+		// Create a skill in skills/ dir
+		skillsDirSkill := filepath.Join(dir, "skills", "skill-in-skills")
+		if err := os.MkdirAll(skillsDirSkill, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(skillsDirSkill, "SKILL.md"), []byte("---\nname: skill-in-skills\n---\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		// Create another skill directly in root — should be ignored when skills/ exists
+		rootSkill := filepath.Join(dir, "skill-in-root")
+		if err := os.MkdirAll(rootSkill, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(rootSkill, "SKILL.md"), []byte("---\nname: skill-in-root\n---\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		got, err := Scan(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Only skill from skills/ dir should be found
+		want := []types.DetectedSkill{
+			{Name: "skill-in-skills", SkillPath: skillsDirSkill},
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("Scan() mismatch (-want +got):\n%s", diff)
 		}
 	})
 
