@@ -14,24 +14,44 @@ import (
 
 const skillFile = "SKILL.md"
 
-// Scan looks for SKILL.md files in the skills/ subdirectory of rootDir.
-// If no skills/ directory exists, returns an empty slice (not an error).
+// Scan looks for SKILL.md files.
+// Priority: if rootDir contains a skills/ subdirectory, scan only within it.
+// Otherwise, scan rootDir directly.
+// If the scan directory itself contains SKILL.md, it is returned as a single skill.
+// Otherwise, subdirectories are scanned recursively.
 // When a SKILL.md is found the walk does not descend further into that
 // directory (matching skm behaviour). Returns one DetectedSkill per unique
 // skill name found; when duplicates exist the shallowest path wins.
 func Scan(rootDir string) ([]types.DetectedSkill, error) {
-	skillsDir := filepath.Join(rootDir, "skills")
-	info, err := os.Stat(skillsDir)
-	if err != nil || !info.IsDir() {
-		// No skills/ directory — return empty slice
-		return nil, nil
+	// Priority: check for skills/ subdirectory first
+	scanDir := rootDir
+	if skillsDir := filepath.Join(rootDir, "skills"); isDir(skillsDir) {
+		scanDir = skillsDir
 	}
 
+	// Check if scanDir itself contains a SKILL.md
+	skillMD := filepath.Join(scanDir, skillFile)
+	if _, err := os.Stat(skillMD); err == nil {
+		// scanDir itself is a skill — return it directly
+		skill, err := parseSkillMD(skillMD, scanDir)
+		if err != nil {
+			return nil, err
+		}
+		return []types.DetectedSkill{skill}, nil
+	}
+
+	// Otherwise, scan subdirectories
 	var raw []types.DetectedSkill
-	if err := walk(skillsDir, skillsDir, &raw); err != nil {
+	if err := walk(scanDir, scanDir, &raw); err != nil {
 		return nil, err
 	}
-	return deduplicateSkills(raw, skillsDir), nil
+	return deduplicateSkills(raw, scanDir), nil
+}
+
+// isDir reports whether path is a directory.
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // deduplicateSkills returns skills with duplicate names removed, keeping the
