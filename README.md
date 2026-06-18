@@ -98,6 +98,9 @@ skimi install github.com/example/ai-skills
 # List installed skills
 skimi list
 
+# Edit skills.yaml
+skimi edit
+
 # Preview skills in a source without installing
 skimi view github.com/example/ai-skills
 
