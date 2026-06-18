@@ -81,6 +81,176 @@ func Run(cfg *types.SkmConfig, opts Options) error {
 	return nil
 }
 
+// UpdateRepos updates the selected remote repos and preserves unrelated lock entries.
+func UpdateRepos(cfg *types.SkmConfig, repos []string, opts Options) error {
+	lf, err := lock.Load(opts.LockPath)
+	if err != nil {
+		return fmt.Errorf("load lock file: %w", err)
+	}
+
+	defaultAgents := resolveDefaultAgents(cfg)
+	changedRepos := make(map[string][]types.InstalledSkill)
+
+	for i, repo := range repos {
+		if i > 0 {
+			fmt.Println()
+		}
+
+		pkgs, err := packagesForRepo(cfg, repo)
+		if err != nil {
+			return err
+		}
+		oldCommit := lockedRepoCommit(lf, repo)
+
+		dest := RepoStorePath(opts.StoreDir, repo)
+		fmt.Println(ui.Blue.Render("Pulling " + repo + " ..."))
+		if err := ensureRepo(pkgs[0].cloneURL, dest); err != nil {
+			return err
+		}
+		newCommit, err := git.HeadCommit(dest)
+		if err != nil {
+			return err
+		}
+
+		if oldCommit == newCommit {
+			commit := shortCommit(newCommit)
+			if commit == "" {
+				commit = "unknown"
+			}
+			fmt.Println(ui.Green.Render("  Already up to date (" + commit + ")"))
+			continue
+		}
+
+		fmt.Printf("  Updated %s -> %s\n", ui.Red.Render(shortCommit(oldCommit)), ui.Green.Render(shortCommit(newCommit)))
+		if oldCommit != "" {
+			log, err := git.Log(dest, oldCommit, newCommit)
+			if err == nil && log != "" {
+				for _, line := range strings.Split(log, "\n") {
+					fmt.Println(ui.Dim.Render("    " + line))
+				}
+			}
+		}
+
+		var installed []types.InstalledSkill
+		for _, pkg := range pkgs {
+			entries, err := installPackage(pkg.config, defaultAgents, opts)
+			if err != nil {
+				return err
+			}
+			installed = append(installed, entries...)
+		}
+		changedRepos[repo] = installed
+	}
+
+	if len(changedRepos) == 0 {
+		return nil
+	}
+
+	newLF := replaceUpdatedRepoEntries(lf, repos, changedRepos)
+	if err := removeReplacedLinks(lf, newLF, changedRepos, opts); err != nil {
+		return err
+	}
+
+	if !opts.DryRun {
+		if err := lock.Save(opts.LockPath, newLF); err != nil {
+			return fmt.Errorf("save lock file: %w", err)
+		}
+	}
+	fmt.Println("Lock file updated.")
+	return nil
+}
+
+type repoPackage struct {
+	config   types.SkillPackageConfig
+	cloneURL string
+}
+
+func packagesForRepo(cfg *types.SkmConfig, repo string) ([]repoPackage, error) {
+	var out []repoPackage
+	for _, pkg := range cfg.Packages {
+		if pkg.Repo == "" {
+			continue
+		}
+		parsed, err := source.Parse(pkg.Repo)
+		if err != nil {
+			return nil, fmt.Errorf("parse repo %q: %w", pkg.Repo, err)
+		}
+		if parsed.Kind != source.SourceRemote {
+			continue
+		}
+		if parsed.Repo == repo {
+			out = append(out, repoPackage{
+				config:   pkg,
+				cloneURL: parsed.GetCloneURL(),
+			})
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("repo %q is not declared in config", repo)
+	}
+	return out, nil
+}
+
+func lockedRepoCommit(lf *types.LockFile, repo string) string {
+	for _, skill := range lf.Skills {
+		if skill.Repo == repo {
+			return skill.Commit
+		}
+	}
+	return ""
+}
+
+func replaceUpdatedRepoEntries(lf *types.LockFile, repos []string, changedRepos map[string][]types.InstalledSkill) *types.LockFile {
+	newLF := &types.LockFile{}
+	for _, skill := range lf.Skills {
+		if _, changed := changedRepos[skill.Repo]; changed {
+			continue
+		}
+		newLF.Skills = append(newLF.Skills, skill)
+	}
+	for _, repo := range repos {
+		if skills, changed := changedRepos[repo]; changed {
+			newLF.Skills = append(newLF.Skills, skills...)
+		}
+	}
+	return newLF
+}
+
+func removeReplacedLinks(oldLF, newLF *types.LockFile, changedRepos map[string][]types.InstalledSkill, opts Options) error {
+	newLinks := make(map[string]struct{})
+	for _, skill := range newLF.Skills {
+		for _, link := range skill.LinkedTo {
+			newLinks[link] = struct{}{}
+		}
+	}
+
+	for _, skill := range oldLF.Skills {
+		if _, changed := changedRepos[skill.Repo]; !changed {
+			continue
+		}
+		for _, link := range skill.LinkedTo {
+			if _, keep := newLinks[link]; keep {
+				continue
+			}
+			fmt.Printf("Removing stale link %s\n", shortPath(link))
+			if opts.DryRun {
+				continue
+			}
+			if err := linker.RemoveLink(link); err != nil {
+				return fmt.Errorf("remove stale link %s: %w", link, err)
+			}
+		}
+	}
+	return nil
+}
+
+func shortCommit(commit string) string {
+	if len(commit) <= 8 {
+		return commit
+	}
+	return commit[:8]
+}
+
 // installPackage processes a single SkillPackageConfig and returns the
 // InstalledSkill entries it produced.
 func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts Options) ([]types.InstalledSkill, error) {

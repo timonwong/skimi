@@ -84,9 +84,13 @@ func newCheckUpdatesCmd() *cobra.Command {
 			if !anyUpdate {
 				fmt.Println("\nAll skills are up to date.")
 			} else {
-				fmt.Println("\nRun `skimi update` to apply updates.")
+				fmt.Println("\n" + updateHint())
 			}
 			return nil
 		},
 	}
+}
+
+func updateHint() string {
+	return "Run `skimi update --all` to apply updates."
 }

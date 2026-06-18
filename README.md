@@ -107,8 +107,11 @@ skimi view github.com/example/ai-skills
 # Check for updates
 skimi check-updates
 
-# Update all skills
-skimi update
+# Update selected skills
+skimi update <skill-name> [skill-name...]
+
+# Update all remote skills
+skimi update --all
 
 # Remove a skill
 skimi remove <skill-name>
