@@ -79,7 +79,11 @@ func runEdit(configPath string, env editorEnv) error {
 	if err != nil {
 		return fmt.Errorf("create diff temp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() {
+		if err := os.RemoveAll(tmpDir); err != nil {
+			fmt.Fprintf(env.stderr, "warning: remove diff temp dir: %v\n", err)
+		}
+	}()
 
 	beforePath := filepath.Join(tmpDir, "skills.yaml.before")
 	if err := os.WriteFile(beforePath, before, 0o644); err != nil {
