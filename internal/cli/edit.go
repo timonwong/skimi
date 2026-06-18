@@ -90,8 +90,8 @@ func runEdit(configPath string, env editorEnv) error {
 		return fmt.Errorf("write config snapshot: %w", err)
 	}
 
-	args := []string{"-c", env.editor + ` "$1"`, "skimi-editor", configPath}
-	if err := env.runner.Run("sh", args, env.stdin, env.stdout, env.stderr); err != nil {
+	editorName, editorArgs := editorCommand(env.goos, env.editor, configPath)
+	if err := env.runner.Run(editorName, editorArgs, env.stdin, env.stdout, env.stderr); err != nil {
 		return fmt.Errorf("run editor: %w", err)
 	}
 
@@ -149,6 +149,13 @@ func systemOpener(goos string) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported platform %q: set EDITOR to edit config", goos)
 	}
+}
+
+func editorCommand(goos, editor, configPath string) (string, []string) {
+	if goos == "windows" {
+		return "cmd", []string{"/C", editor + ` "` + configPath + `"`}
+	}
+	return "sh", []string{"-c", editor + ` "$1"`, "skimi-editor", configPath}
 }
 
 func printConfigDiff(beforePath, afterPath string, stdout, stderr io.Writer, runner commandRunner) error {

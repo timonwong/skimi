@@ -80,6 +80,40 @@ func TestRunEditPrintsUnchangedMessage(t *testing.T) {
 	}
 }
 
+func TestRunEditUsesWindowsCommandProcessorForEditor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "skills.yaml")
+	if err := os.WriteFile(path, []byte("packages: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout bytes.Buffer
+	var gotName string
+	var gotArgs []string
+
+	err := runEdit(path, editorEnv{
+		editor: "notepad",
+		goos:   "windows",
+		stdout: &stdout,
+		runner: commandRunnerFunc(func(name string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+			gotName = name
+			gotArgs = append([]string(nil), args...)
+			return nil
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if gotName != "cmd" {
+		t.Fatalf("command name = %q, want cmd", gotName)
+	}
+	if len(gotArgs) != 2 || gotArgs[0] != "/C" || gotArgs[1] != `notepad "`+path+`"` {
+		t.Fatalf("command args = %#v", gotArgs)
+	}
+	if got := stdout.String(); !strings.Contains(got, "No changes.") {
+		t.Fatalf("stdout = %q, want unchanged message", got)
+	}
+}
+
 func TestRunEditUsesSystemOpenerWhenEditorIsUnset(t *testing.T) {
 	tests := []struct {
 		name     string
