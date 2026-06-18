@@ -107,3 +107,29 @@ func TestUpdateCommandUsageValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestFilterUpdateReposByConfig(t *testing.T) {
+	cfg := &types.SkmConfig{Packages: []types.SkillPackageConfig{
+		{Repo: "github.com/example/one"},
+		{Repo: "https://github.com/example/two.git"},
+		{LocalPath: "/tmp/local"},
+	}}
+	repos := []string{
+		"github.com/example/one",
+		"github.com/example/adhoc",
+		"github.com/example/two",
+	}
+
+	gotRepos, gotSkipped, err := filterUpdateReposByConfig(cfg, repos)
+	if err != nil {
+		t.Fatalf("filterUpdateReposByConfig() error: %v", err)
+	}
+	wantRepos := []string{"github.com/example/one", "github.com/example/two"}
+	if diff := cmp.Diff(wantRepos, gotRepos); diff != "" {
+		t.Errorf("repos mismatch (-want +got):\n%s", diff)
+	}
+	wantSkipped := []string{"github.com/example/adhoc"}
+	if diff := cmp.Diff(wantSkipped, gotSkipped); diff != "" {
+		t.Errorf("skipped mismatch (-want +got):\n%s", diff)
+	}
+}

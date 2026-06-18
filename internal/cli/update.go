@@ -7,6 +7,7 @@ import (
 	"github.com/timonwong/skimi/internal/config"
 	"github.com/timonwong/skimi/internal/installer"
 	"github.com/timonwong/skimi/internal/lock"
+	"github.com/timonwong/skimi/internal/source"
 	"github.com/timonwong/skimi/internal/types"
 	"github.com/timonwong/skimi/internal/ui"
 )
@@ -47,7 +48,14 @@ func newUpdateCmd() *cobra.Command {
 			for _, name := range selection.LocalSkills {
 				fmt.Println(ui.Dim.Render(fmt.Sprintf("Skill %q is from a local path, skipping update.", name)))
 			}
-			if len(selection.Repos) == 0 {
+			repos, skippedRepos, err := filterUpdateReposByConfig(cfg, selection.Repos)
+			if err != nil {
+				return err
+			}
+			for _, repo := range skippedRepos {
+				fmt.Println(ui.Dim.Render(fmt.Sprintf("Repo %q is not declared in config, skipping update.", repo)))
+			}
+			if len(repos) == 0 {
 				fmt.Println("Nothing to update.")
 				return nil
 			}
@@ -58,7 +66,7 @@ func newUpdateCmd() *cobra.Command {
 				DryRun:   dryRun,
 				Verbose:  verbose,
 			}
-			return installer.UpdateRepos(cfg, selection.Repos, opts)
+			return installer.UpdateRepos(cfg, repos, opts)
 		},
 	}
 
@@ -108,4 +116,31 @@ func selectUpdateRepos(lf *types.LockFile, skillNames []string, updateAll bool) 
 	}
 
 	return selection, nil
+}
+
+func filterUpdateReposByConfig(cfg *types.SkmConfig, repos []string) ([]string, []string, error) {
+	declared := make(map[string]struct{})
+	for _, pkg := range cfg.Packages {
+		if pkg.Repo == "" {
+			continue
+		}
+		parsed, err := source.Parse(pkg.Repo)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse repo %q: %w", pkg.Repo, err)
+		}
+		if parsed.Kind == source.SourceRemote {
+			declared[parsed.Repo] = struct{}{}
+		}
+	}
+
+	var filtered []string
+	var skipped []string
+	for _, repo := range repos {
+		if _, ok := declared[repo]; ok {
+			filtered = append(filtered, repo)
+			continue
+		}
+		skipped = append(skipped, repo)
+	}
+	return filtered, skipped, nil
 }
