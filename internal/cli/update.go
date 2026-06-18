@@ -98,7 +98,7 @@ func selectUpdateRepos(lf *types.LockFile, skillNames []string, updateAll bool) 
 	for _, name := range skillNames {
 		skill := lock.FindByName(lf, name)
 		if skill == nil {
-			return updateRepoSelection{}, fmt.Errorf("Skill '%s' is not installed.", name)
+			return updateRepoSelection{}, fmt.Errorf("skill '%s' is not installed", name)
 		}
 		if skill.Repo == "" {
 			selection.LocalSkills = append(selection.LocalSkills, name)

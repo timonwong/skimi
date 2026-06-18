@@ -49,7 +49,7 @@ func TestSelectUpdateRepos(t *testing.T) {
 		{
 			name:    "missing skill returns an error",
 			skills:  []string{"missing"},
-			wantErr: "Skill 'missing' is not installed.",
+			wantErr: "skill 'missing' is not installed",
 		},
 	}
 
