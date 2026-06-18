@@ -44,6 +44,7 @@ func init() {
 		newInstallCmd(),
 		newListCmd(),
 		newViewCmd(),
+		newEditCmd(),
 		newCheckUpdatesCmd(),
 		newUpdateCmd(),
 		newRemoveCmd(),
