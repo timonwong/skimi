@@ -114,7 +114,7 @@ func UpdateRepos(cfg *types.SkmConfig, repos []string, opts Options) error {
 				continue
 			}
 			fmt.Println(ui.Blue.Render("Fetching " + repo + " ..."))
-			dryRunFetch(dest, repo, oldCommit)
+			DryRunFetch(dest, repo, oldCommit)
 			continue
 		}
 
@@ -328,7 +328,7 @@ func preparePackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 				if headErr != nil {
 					fmt.Fprintf(os.Stderr, "warning: read HEAD for %s: %v\n", repo, headErr)
 				} else {
-					dryRunFetch(dest, repo, oldCommit)
+					DryRunFetch(dest, repo, oldCommit)
 				}
 			} else if err := EnsureRepo(opts.StoreDir, parsed.GetCloneURL(), dest); err != nil {
 				return nil, err
@@ -713,13 +713,15 @@ func withStoreHint(dest string, err error) error {
 	return fmt.Errorf("sync store clone: %w\nhint: check the network, or remove the store copy at %s and retry", err, dest)
 }
 
-// dryRunFetch fetches dest read-only — git fetch only ever writes
+// DryRunFetch fetches dest read-only — git fetch only ever writes
 // .git-internal refs such as FETCH_HEAD, it never moves the working tree —
 // and reports whether pulling would move it past oldCommit. It mirrors the
 // pattern `check-updates` uses to preview remote state without mutating it.
 // Fetch and rev-parse failures are printed as warnings, not returned: a dry
-// run must never abort because a preview step failed.
-func dryRunFetch(dest, repo, oldCommit string) {
+// run must never abort because a preview step failed. Exported because the
+// interactive cli path owns its own sync (SkipSync) and needs the same
+// preview.
+func DryRunFetch(dest, repo, oldCommit string) {
 	if err := git.Fetch(dest); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: fetch %s: %v\n", repo, err)
 		return
