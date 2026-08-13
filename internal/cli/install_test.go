@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/timonwong/skimi/internal/git"
@@ -60,7 +62,7 @@ func TestResolveSourceSyncPolicy(t *testing.T) {
 			storeRepo := installer.RepoStorePath(storeDir, repoID)
 			redirectClones(t, "https://"+repoID, tt.prepare(t, dir, origin, storeRepo))
 
-			got, isRemote, err := resolveSource(repoID, storeDir)
+			got, isRemote, err := resolveSource(repoID, storeDir, false)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("resolveSource() expected an error when nothing usable is left")
@@ -84,6 +86,72 @@ func TestResolveSourceSyncPolicy(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestResolveSourceDryRun pins the read-only contract of an interactive dry
+// run: an existing store copy is previewed without moving its working tree,
+// and a missing one stops before cloning instead of mutating the store.
+func TestResolveSourceDryRun(t *testing.T) {
+	const repoID = "github.com/example/dryrun"
+
+	t.Run("missing store copy stops before cloning", func(t *testing.T) {
+		dir := t.TempDir()
+		origin := filepath.Join(dir, "origin")
+		initSkillRepo(t, origin, "alpha")
+		storeDir := filepath.Join(dir, "store")
+		redirectClones(t, "https://"+repoID, origin)
+
+		_, isRemote, err := resolveSource(repoID, storeDir, true)
+		if !errors.Is(err, errDryRunNotCloned) {
+			t.Fatalf("resolveSource() error = %v, want errDryRunNotCloned", err)
+		}
+		if !isRemote {
+			t.Error("resolveSource() isRemote = false, want true")
+		}
+		if _, statErr := os.Stat(installer.RepoStorePath(storeDir, repoID)); !os.IsNotExist(statErr) {
+			t.Fatalf("dry run created a store copy: %v", statErr)
+		}
+	})
+
+	t.Run("cached store copy is previewed without moving it", func(t *testing.T) {
+		dir := t.TempDir()
+		origin := filepath.Join(dir, "origin")
+		initSkillRepo(t, origin, "alpha")
+		storeDir := filepath.Join(dir, "store")
+		storeRepo := installer.RepoStorePath(storeDir, repoID)
+		gitRun(t, dir, "clone", origin, storeRepo)
+		oldHead := gitHead(t, storeRepo)
+
+		// Advance origin so a pull would move the store working tree.
+		body := []byte("---\nname: alpha\ndescription: test skill\n---\n\nv2\n")
+		if err := os.WriteFile(filepath.Join(origin, "alpha", "SKILL.md"), body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		gitRun(t, origin, "commit", "-am", "advance")
+		redirectClones(t, "https://"+repoID, origin)
+
+		got, isRemote, err := resolveSource(repoID, storeDir, true)
+		if err != nil {
+			t.Fatalf("resolveSource() error: %v", err)
+		}
+		if !isRemote || got != storeRepo {
+			t.Fatalf("resolveSource() = %q, %v, want %q, true", got, isRemote, storeRepo)
+		}
+		if head := gitHead(t, storeRepo); head != oldHead {
+			t.Fatalf("dry run moved the store checkout: %q -> %q", oldHead, head)
+		}
+	})
+}
+
+func gitHead(t *testing.T, dir string) string {
+	t.Helper()
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD in %s: %v\n%s", dir, err, out)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func initSkillRepo(t *testing.T, dir, skill string) {

@@ -283,7 +283,7 @@ func newViewCmd() *cobra.Command {
 }
 
 func runView(source, storeDir string) error {
-	sourceDir, _, err := resolveSource(source, storeDir)
+	sourceDir, _, err := resolveSource(source, storeDir, false)
 	if err != nil {
 		return err
 	}

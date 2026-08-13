@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -73,7 +74,10 @@ func runInstallInteractive(src string, preselect []string, opts installer.Option
 	opts.SkipSync = true
 
 	// Resolve source to a local directory.
-	sourceDir, isRemote, err := resolveSource(src, opts.StoreDir)
+	sourceDir, isRemote, err := resolveSource(src, opts.StoreDir, opts.DryRun)
+	if errors.Is(err, errDryRunNotCloned) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -154,13 +158,21 @@ func selectSkillsTUI(skills []types.DetectedSkill) ([]string, error) {
 	return chosen, nil
 }
 
+// errDryRunNotCloned reports that a dry run stopped before the TUI because
+// the source repo has no store copy yet: cloning is the very mutation a dry
+// run promises not to make, and without a clone there is nothing real to
+// select from.
+var errDryRunNotCloned = errors.New("dry-run: source repo is not cloned")
+
 // resolveSource returns the local directory for a source, cloning if needed.
 // isRemote is true when the source was a git repo. A failed sync is a warning
 // rather than an error whenever a usable clone survives it: the cached copy is
 // good enough to browse and install from offline. Callers must set
 // installer.Options.SkipSync afterwards, since this is the only sync the
-// interactive commands perform.
-func resolveSource(src, storeDir string) (dir string, isRemote bool, err error) {
+// interactive commands perform. With dryRun set the store is never mutated:
+// an existing copy gets a read-only fetch preview, a missing one returns
+// errDryRunNotCloned.
+func resolveSource(src, storeDir string, dryRun bool) (dir string, isRemote bool, err error) {
 	parsed, err := source.Parse(src)
 	if err != nil {
 		return "", false, err
@@ -177,11 +189,25 @@ func resolveSource(src, storeDir string) (dir string, isRemote bool, err error) 
 	// Remote repo: clone, update, or repair the store copy.
 	dest := installer.RepoStorePath(storeDir, parsed.Repo)
 	if _, statErr := os.Stat(dest); os.IsNotExist(statErr) {
+		if dryRun {
+			fmt.Println(ui.Yellow.Render("Would clone " + parsed.Repo))
+			fmt.Println(ui.Dim.Render("  Nothing to preview until the repo is cloned; run without --dry-run first."))
+			return "", true, errDryRunNotCloned
+		}
 		fmt.Println(ui.Blue.Render("Using " + parsed.Repo))
 	} else {
 		fmt.Println(ui.Blue.Render("Using existing " + parsed.Repo))
 	}
-	if err := installer.EnsureRepo(storeDir, parsed.GetCloneURL(), dest); err != nil {
+	if dryRun {
+		// Preview remote state read-only and browse the unmoved working tree,
+		// which live skill symlinks point into.
+		oldCommit, headErr := git.HeadCommit(dest)
+		if headErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: read HEAD for %s: %v\n", parsed.Repo, headErr)
+		} else {
+			installer.DryRunFetch(dest, parsed.Repo, oldCommit)
+		}
+	} else if err := installer.EnsureRepo(storeDir, parsed.GetCloneURL(), dest); err != nil {
 		// An offline sync is survivable as long as the cached copy is intact;
 		// without one there is nothing to browse, so the error stands.
 		if !git.IsRepoRoot(dest) {
