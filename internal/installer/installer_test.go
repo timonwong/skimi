@@ -1,6 +1,8 @@
 package installer
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -429,6 +431,149 @@ func TestRunSkipSyncControlsRemoteSync(t *testing.T) {
 				t.Fatalf("linked SKILL.md = %q, want it to contain %q", body, wantBody)
 			}
 		})
+	}
+}
+
+// TestRunDryRunFetchesButNeverPullsCachedStore pins the issue #17 contract: a
+// dry run against a repo that is already cloned may fetch it to preview
+// updates, but must never pull, since installed skills are symlinks into the
+// store's working tree and a pull would move what agents load before the
+// lock records anything.
+func TestRunDryRunFetchesButNeverPullsCachedStore(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+
+	origin := filepath.Join(dir, "origin")
+	makeSkillRepo(t, origin, map[string]string{"alpha": "alpha v1"})
+
+	repoID := "github.com/example/dryrun-cached"
+	storeDir := filepath.Join(dir, "store")
+	storeRepo := RepoStorePath(storeDir, repoID)
+	gitRun(t, dir, "clone", origin, storeRepo)
+	cachedCommit := gitHead(t, storeRepo)
+
+	// Advance the origin so a real sync would move the store past cachedCommit.
+	makeSkillRepoCommit(t, origin, map[string]string{"alpha": "alpha v2"})
+
+	lockPath := filepath.Join(dir, "lock.yaml")
+	cfg := &types.SkmConfig{
+		Agents:   &types.DefaultAgentsConfig{Default: []string{types.AgentClaude}},
+		Packages: []types.SkillPackageConfig{{Repo: repoID, Skills: selectors("alpha")}},
+	}
+
+	if err := Run(cfg, Options{
+		StoreDir: storeDir,
+		LockPath: lockPath,
+		DryRun:   true,
+	}); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	if got := gitHead(t, storeRepo); got != cachedCommit {
+		t.Fatalf("store HEAD moved during dry run: got %q, want unchanged %q", got, cachedCommit)
+	}
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("dry run wrote a lock file: stat err = %v", err)
+	}
+	link := filepath.Join(home, ".claude", "skills", "alpha")
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("dry run created a link at %s: stat err = %v", link, err)
+	}
+}
+
+// TestRunDryRunReportsWouldCloneForMissingStore pins the other half of the
+// issue #17 fix: a dry run for a repo that has never been cloned has nothing
+// local to detect skills from, so it must report the clone and skip that
+// package instead of failing the whole dry run.
+func TestRunDryRunReportsWouldCloneForMissingStore(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", filepath.Join(dir, "home"))
+
+	repoID := "github.com/example/dryrun-never-cloned"
+	storeDir := filepath.Join(dir, "store")
+	lockPath := filepath.Join(dir, "lock.yaml")
+
+	cfg := &types.SkmConfig{
+		Agents:   &types.DefaultAgentsConfig{Default: []string{types.AgentClaude}},
+		Packages: []types.SkillPackageConfig{{Repo: repoID, Skills: selectors("alpha")}},
+	}
+
+	var runErr error
+	stdout := captureStdout(t, func() {
+		runErr = Run(cfg, Options{
+			StoreDir: storeDir,
+			LockPath: lockPath,
+			DryRun:   true,
+		})
+	})
+	if runErr != nil {
+		t.Fatalf("Run() error: %v", runErr)
+	}
+
+	if !strings.Contains(stdout, "Would clone "+repoID) {
+		t.Fatalf("stdout = %q, want it to contain %q", stdout, "Would clone "+repoID)
+	}
+	if _, err := os.Stat(RepoStorePath(storeDir, repoID)); !os.IsNotExist(err) {
+		t.Fatalf("dry run cloned the repo: stat err = %v", err)
+	}
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("dry run wrote a lock file: stat err = %v", err)
+	}
+}
+
+// TestUpdateReposDryRunFetchesButNeverPulls mirrors the Run() dry-run
+// contract for UpdateRepos: its up-front sync loop must fetch to preview
+// updates instead of pulling every selected repo before applyPlan ever
+// consults opts.DryRun.
+func TestUpdateReposDryRunFetchesButNeverPulls(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+
+	origin := filepath.Join(dir, "origin")
+	makeSkillRepo(t, origin, map[string]string{"alpha": "alpha v1"})
+	oldCommit := gitHead(t, origin)
+
+	repoID := "github.com/example/dryrun-update"
+	storeDir := filepath.Join(dir, "store")
+	storeRepo := RepoStorePath(storeDir, repoID)
+	gitRun(t, dir, "clone", origin, storeRepo)
+
+	makeSkillRepoCommit(t, origin, map[string]string{"alpha": "alpha v2"})
+
+	lockPath := filepath.Join(dir, "skills-lock.yaml")
+	alphaLink := filepath.Join(home, ".claude", "skills", "alpha")
+	writeLock(t, lockPath, &types.LockFile{Skills: []types.InstalledSkill{{
+		Name:      "alpha",
+		Repo:      repoID,
+		Commit:    oldCommit,
+		SkillPath: filepath.Join(storeRepo, "alpha"),
+		LinkedTo:  []string{alphaLink},
+	}}})
+
+	cfg := &types.SkmConfig{
+		Agents:   &types.DefaultAgentsConfig{Default: []string{types.AgentClaude}},
+		Packages: []types.SkillPackageConfig{{Repo: repoID, Skills: selectors("alpha")}},
+	}
+
+	if err := UpdateRepos(cfg, []string{repoID}, Options{
+		StoreDir: storeDir,
+		LockPath: lockPath,
+		DryRun:   true,
+	}); err != nil {
+		t.Fatalf("UpdateRepos() error: %v", err)
+	}
+
+	if got := gitHead(t, storeRepo); got != oldCommit {
+		t.Fatalf("store HEAD moved during dry run: got %q, want unchanged %q", got, oldCommit)
+	}
+	got := readLock(t, lockPath)
+	if len(got.Skills) != 1 || got.Skills[0].Commit != oldCommit {
+		t.Fatalf("lock changed during dry run: %+v", got.Skills)
+	}
+	if _, err := os.Lstat(alphaLink); !os.IsNotExist(err) {
+		t.Fatalf("dry run created a link at %s: stat err = %v", alphaLink, err)
 	}
 }
 
@@ -893,6 +1038,35 @@ func readLock(t *testing.T, path string) *types.LockFile {
 		t.Fatal(err)
 	}
 	return lf
+}
+
+// captureStdout runs fn with the process's os.Stdout redirected into a
+// buffer and returns everything fn printed. installer prints status lines
+// straight to os.Stdout, so tests asserting on dry-run reporting need to
+// intercept it there rather than through an injectable writer.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stdout
+	os.Stdout = w
+	done := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		done <- buf.String()
+	}()
+	defer func() {
+		os.Stdout = orig
+		_ = w.Close()
+	}()
+
+	fn()
+
+	_ = w.Close()
+	return <-done
 }
 
 func bytesTrimSpace(b []byte) []byte {

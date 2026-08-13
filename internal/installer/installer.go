@@ -101,6 +101,23 @@ func UpdateRepos(cfg *types.SkmConfig, repos []string, opts Options) error {
 		oldCommit := lockedRepoCommit(lf, repo)
 
 		dest := RepoStorePath(opts.StoreDir, repo)
+
+		// A dry run must never pull the store: installed skills are symlinks
+		// into its working tree, so a pull here would change what agents load
+		// before the lock records anything. Fetch instead, which only writes
+		// .git-internal refs such as FETCH_HEAD, and report what a real pull
+		// would do.
+		if opts.DryRun {
+			if _, statErr := os.Stat(dest); os.IsNotExist(statErr) {
+				// Nothing local to report yet; preparePackage reports the
+				// clone when it processes this repo's packages below.
+				continue
+			}
+			fmt.Println(ui.Blue.Render("Fetching " + repo + " ..."))
+			dryRunFetch(dest, repo, oldCommit)
+			continue
+		}
+
 		fmt.Println(ui.Blue.Render("Pulling " + repo + " ..."))
 		if err := ensureRepo(pkgs[0].cloneURL, dest); err != nil {
 			return err
@@ -282,14 +299,38 @@ func preparePackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 		dest := RepoStorePath(opts.StoreDir, parsed.Repo)
 
 		_, statErr := os.Stat(dest)
-		if os.IsNotExist(statErr) {
+		destMissing := os.IsNotExist(statErr)
+
+		// A dry run must never clone the store, and there is nothing local to
+		// detect skills from yet, so report the clone and skip this package
+		// instead of failing the dry run. This applies regardless of
+		// syncRemote: a caller that believes the repo is already synced (for
+		// example UpdateRepos, after its own dry-run fetch) must still not
+		// crash if the store was never actually cloned.
+		if opts.DryRun && destMissing {
+			fmt.Println(ui.Blue.Render("Would clone " + repo))
+			return nil, nil
+		}
+
+		if destMissing {
 			fmt.Println(ui.Blue.Render("Using " + repo))
 		} else {
 			fmt.Println(ui.Blue.Render("Using existing " + repo))
 		}
 
 		if syncRemote {
-			if err := ensureRepo(parsed.GetCloneURL(), dest); err != nil {
+			if opts.DryRun {
+				// Never pull the store on a dry run: fetch is read-only (it
+				// only writes .git-internal refs such as FETCH_HEAD) and
+				// leaves the working tree, which live skill symlinks point
+				// into, untouched.
+				oldCommit, headErr := git.HeadCommit(dest)
+				if headErr != nil {
+					fmt.Fprintf(os.Stderr, "warning: read HEAD for %s: %v\n", repo, headErr)
+				} else {
+					dryRunFetch(dest, repo, oldCommit)
+				}
+			} else if err := ensureRepo(parsed.GetCloneURL(), dest); err != nil {
 				return nil, err
 			}
 		}
@@ -593,6 +634,49 @@ func ensureRepo(repo, dest string) error {
 		return git.Clone(repo, dest)
 	}
 	return git.Pull(dest)
+}
+
+// dryRunFetch fetches dest read-only — git fetch only ever writes
+// .git-internal refs such as FETCH_HEAD, it never moves the working tree —
+// and reports whether pulling would move it past oldCommit. It mirrors the
+// pattern `check-updates` uses to preview remote state without mutating it.
+// Fetch and rev-parse failures are printed as warnings, not returned: a dry
+// run must never abort because a preview step failed.
+func dryRunFetch(dest, repo, oldCommit string) {
+	if err := git.Fetch(dest); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: fetch %s: %v\n", repo, err)
+		return
+	}
+
+	// After git fetch, FETCH_HEAD contains the fetched commit.
+	newCommit, err := git.RevParse(dest, "FETCH_HEAD")
+	if err != nil {
+		// Fall back to HEAD.
+		newCommit, err = git.HeadCommit(dest)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: get remote HEAD for %s: %v\n", repo, err)
+			return
+		}
+	}
+
+	if oldCommit == newCommit {
+		commit := shortCommit(newCommit)
+		if commit == "" {
+			commit = "unknown"
+		}
+		fmt.Println(ui.Green.Render("  Already up to date (" + commit + ")"))
+		return
+	}
+
+	fmt.Printf("  Would update %s -> %s\n", ui.Red.Render(shortCommit(oldCommit)), ui.Green.Render(shortCommit(newCommit)))
+	if oldCommit != "" {
+		log, err := git.Log(dest, oldCommit, newCommit)
+		if err == nil && log != "" {
+			for _, line := range strings.Split(log, "\n") {
+				fmt.Println(ui.Dim.Render("    " + line))
+			}
+		}
+	}
 }
 
 // shortPath replaces the home directory prefix with ~.
