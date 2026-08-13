@@ -6,8 +6,10 @@ import (
 	"github.com/timonwong/skimi/internal/cli"
 )
 
+var version = "dev"
+
 func main() {
-	if err := cli.Execute(); err != nil {
+	if err := cli.Execute(version); err != nil {
 		os.Exit(1)
 	}
 }

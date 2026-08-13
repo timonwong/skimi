@@ -57,35 +57,40 @@ packages:
 
 ## Installation
 
-### GitHub Releases (Recommended)
+### Homebrew
 
-Download the pre-built binary for your platform from the [Releases page](https://github.com/timonwong/skimi/releases/latest), or use one of the commands below:
+On macOS or Linux:
 
-```bash
-# macOS (Apple Silicon)
-curl -L https://github.com/timonwong/skimi/releases/latest/download/skimi_darwin_arm64.tar.gz | tar xz
-sudo mv skimi /usr/local/bin/
-
-# macOS (Intel)
-curl -L https://github.com/timonwong/skimi/releases/latest/download/skimi_darwin_amd64.tar.gz | tar xz
-sudo mv skimi /usr/local/bin/
-
-# Linux (x86_64)
-curl -L https://github.com/timonwong/skimi/releases/latest/download/skimi_linux_amd64.tar.gz | tar xz
-sudo mv skimi /usr/local/bin/
-
-# Linux (ARM64)
-curl -L https://github.com/timonwong/skimi/releases/latest/download/skimi_linux_arm64.tar.gz | tar xz
-sudo mv skimi /usr/local/bin/
+```sh
+brew install timonwong/tap/skimi
 ```
 
-### Install from Source
+### GitHub Release
 
-Requires Go 1.23+:
+Download a pre-built archive from
+[GitHub Releases](https://github.com/timonwong/skimi/releases) (Linux, macOS,
+Windows; amd64 and arm64). On Linux and macOS:
 
-```bash
+```sh
+tar -xzf skimi_0.2.0_darwin_arm64.tar.gz
+chmod +x skimi
+sudo mv skimi /usr/local/bin/skimi
+skimi --help
+```
+
+Replace `0.2.0` and `darwin_arm64` with your release version and platform.
+Each release includes a SHA-256 checksum file for verification.
+
+### Manual
+
+Install the latest version from source with Go 1.23 or later:
+
+```sh
 go install github.com/timonwong/skimi/cmd/skimi@latest
 ```
+
+Source installations report the development version rather than a stamped
+release version.
 
 ## Usage
 
