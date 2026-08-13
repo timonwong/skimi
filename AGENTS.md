@@ -62,5 +62,6 @@ No circular dependencies. `types` is the pure leaf; all packages flow up to `cli
 - Duplicate names use deterministic last-wins resolution; `path` selectors disambiguate
 - SKILL.md scan: stops descending once SKILL.md is found in a directory (same as skm behaviour)
 - Every agent uses directory symlinks
+- Deletion requires proof of ownership: `linker.IsManagedLink` accepts only a symlink resolving to the recorded SkillPath or a legacy hardlink tree whose SKILL.md shares the source's inode; anything else is left in place
 - Lock file written atomically; never partially updated
 - `installer.RepoStorePath` and `installer.ExpandPath` are exported for reuse by the CLI layer

@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -208,7 +209,7 @@ func TestUpdateReposUpdatesSelectedRepoAndPreservesUnrelatedEntries(t *testing.T
 	newCommit := gitHead(t, origin)
 
 	staleLink := filepath.Join(dir, "stale-alpha")
-	if err := os.WriteFile(staleLink, []byte("stale"), 0o644); err != nil {
+	if err := os.Symlink(filepath.Join(storeRepo, "alpha"), staleLink); err != nil {
 		t.Fatal(err)
 	}
 
@@ -478,6 +479,123 @@ func TestRunMigratesV1NestedLinkAndRejectsUnownedDestination(t *testing.T) {
 	data, err := os.ReadFile(unowned)
 	if err != nil || string(data) != "user data" {
 		t.Fatalf("unowned destination changed: %q %v", data, err)
+	}
+}
+
+func TestRunRefusesToReplaceUserDirAtLockClaimedPath(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+	sourceDir := filepath.Join(dir, "source")
+	skillDir := filepath.Join(sourceDir, "wait")
+	writeSkill(t, skillDir, "wait")
+
+	dst := filepath.Join(home, ".claude", "skills", "wait")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	userFile := filepath.Join(dst, "NOTES.md")
+	if err := os.WriteFile(userFile, []byte("user data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	lockPath := filepath.Join(dir, "lock.yaml")
+	writeLock(t, lockPath, &types.LockFile{Skills: []types.InstalledSkill{{
+		Name: "wait", LocalPath: sourceDir, SkillPath: skillDir, LinkedTo: []string{dst},
+	}}})
+
+	cfg := &types.SkmConfig{
+		Agents:   &types.DefaultAgentsConfig{Default: []string{types.AgentClaude}},
+		Packages: []types.SkillPackageConfig{{LocalPath: sourceDir}},
+	}
+	err := Run(cfg, Options{LockPath: lockPath})
+	if err == nil || !strings.Contains(err.Error(), "not managed by skimi") {
+		t.Fatalf("Run() error = %v, want unmanaged destination error", err)
+	}
+	data, readErr := os.ReadFile(userFile)
+	if readErr != nil || string(data) != "user data" {
+		t.Fatalf("user directory changed: %q %v", data, readErr)
+	}
+}
+
+func TestRunLeavesUserDirWhenPruningStale(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+	alphaSource := filepath.Join(dir, "alpha-source")
+	writeSkill(t, filepath.Join(alphaSource, "alpha"), "alpha")
+	betaSource := filepath.Join(dir, "beta-source")
+	writeSkill(t, filepath.Join(betaSource, "beta"), "beta")
+
+	alphaDst := filepath.Join(home, ".claude", "skills", "alpha")
+	if err := os.MkdirAll(alphaDst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	userFile := filepath.Join(alphaDst, "NOTES.md")
+	if err := os.WriteFile(userFile, []byte("user data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	lockPath := filepath.Join(dir, "lock.yaml")
+	writeLock(t, lockPath, &types.LockFile{Skills: []types.InstalledSkill{{
+		Name: "alpha", LocalPath: alphaSource, SkillPath: filepath.Join(alphaSource, "alpha"), LinkedTo: []string{alphaDst},
+	}}})
+
+	cfg := &types.SkmConfig{
+		Agents:   &types.DefaultAgentsConfig{Default: []string{types.AgentClaude}},
+		Packages: []types.SkillPackageConfig{{LocalPath: betaSource}},
+	}
+	if err := Run(cfg, Options{LockPath: lockPath}); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	data, err := os.ReadFile(userFile)
+	if err != nil || string(data) != "user data" {
+		t.Fatalf("user directory changed: %q %v", data, err)
+	}
+	lf := readLock(t, lockPath)
+	if len(lf.Skills) != 1 || lf.Skills[0].Name != "beta" {
+		t.Fatalf("lock = %+v", lf.Skills)
+	}
+}
+
+func TestRunMigratesLegacyHardlinkTree(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+	sourceDir := filepath.Join(dir, "source")
+	skillDir := filepath.Join(sourceDir, "wait")
+	writeSkill(t, skillDir, "wait")
+
+	dst := filepath.Join(home, ".agents", "skills", "wait")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(filepath.Join(skillDir, "SKILL.md"), filepath.Join(dst, "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	lockPath := filepath.Join(dir, "lock.yaml")
+	writeLock(t, lockPath, &types.LockFile{Skills: []types.InstalledSkill{{
+		Name: "wait", LocalPath: sourceDir, SkillPath: skillDir, LinkedTo: []string{dst},
+	}}})
+
+	cfg := &types.SkmConfig{
+		Agents:   &types.DefaultAgentsConfig{Default: []string{types.AgentStandard}},
+		Packages: []types.SkillPackageConfig{{LocalPath: sourceDir}},
+	}
+	if err := Run(cfg, Options{LockPath: lockPath}); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	fi, err := os.Lstat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("legacy hardlink tree not migrated to symlink: %v", fi.Mode())
+	}
+	target, err := os.Readlink(dst)
+	if err != nil || target != skillDir {
+		t.Fatalf("migrated target = %q %v", target, err)
 	}
 }
 

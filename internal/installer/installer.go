@@ -393,23 +393,20 @@ func applyPlan(old *types.LockFile, winners []installCandidate, opts Options) er
 			continue
 		}
 		for _, dst := range candidate.entry.LinkedTo {
-			fi, err := os.Lstat(dst)
-			if os.IsNotExist(err) {
+			if _, err := os.Lstat(dst); os.IsNotExist(err) {
 				continue
-			}
-			if err != nil {
+			} else if err != nil {
 				return fmt.Errorf("preflight destination %s: %w", dst, err)
 			}
-			if _, ok := owned[dst]; ok {
+			// A lock entry alone does not prove ownership: the user may have
+			// replaced the link with real content since it was recorded.
+			if prev, ok := owned[dst]; ok && linker.IsManagedLink(dst, prev) {
 				continue
 			}
-			if fi.Mode()&os.ModeSymlink != 0 {
-				target, err := os.Readlink(dst)
-				if err == nil && sameLinkTarget(dst, target, candidate.entry.SkillPath) {
-					continue
-				}
+			if linker.IsManagedLink(dst, candidate.entry.SkillPath) {
+				continue
 			}
-			return fmt.Errorf("destination %s exists and is not managed by skimi", dst)
+			return fmt.Errorf("destination %s exists and is not managed by skimi; remove it manually to let skimi use this path", dst)
 		}
 	}
 
@@ -440,7 +437,14 @@ func applyPlan(old *types.LockFile, winners []installCandidate, opts Options) er
 			}
 		}
 		for _, link := range stale {
-			fmt.Println(ui.Dim.Render("  Would remove stale link " + shortPath(link)))
+			if _, err := os.Lstat(link); os.IsNotExist(err) {
+				continue
+			}
+			if linker.IsManagedLink(link, owned[link]) {
+				fmt.Println(ui.Dim.Render("  Would remove stale link " + shortPath(link)))
+			} else {
+				fmt.Println(ui.Dim.Render("  Would leave " + shortPath(link) + " (not managed by skimi)"))
+			}
 		}
 		return nil
 	}
@@ -487,6 +491,10 @@ func applyPlan(old *types.LockFile, winners []installCandidate, opts Options) er
 		if _, err := os.Lstat(link); os.IsNotExist(err) {
 			continue
 		}
+		if !linker.IsManagedLink(link, owned[link]) {
+			fmt.Fprintf(os.Stderr, "warning: leaving %s: not managed by skimi\n", link)
+			continue
+		}
 		backup := backupPath(link)
 		if err := os.Rename(link, backup); err != nil {
 			rollback()
@@ -521,13 +529,6 @@ func backupPath(path string) string {
 			return candidate
 		}
 	}
-}
-
-func sameLinkTarget(linkPath, target, sourcePath string) bool {
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(filepath.Dir(linkPath), target)
-	}
-	return filepath.Clean(target) == filepath.Clean(sourcePath)
 }
 
 func removeEmptyParents(path string) {
