@@ -65,6 +65,12 @@ func runInstallFromConfig(opts installer.Options) error {
 // path, it is additive: skills already installed stay untouched.
 func runInstallInteractive(src string, preselect []string, opts installer.Options) error {
 	opts.Additive = true
+	// resolveSource below clones or pulls the repo, so the installer must not
+	// sync it a second time. That single sync also fixes the policy conflict:
+	// resolveSource warns and keeps the cached copy when a pull fails, whereas
+	// the installer's sync is fatal, so offline runs used to abort right after
+	// the user picked skills from the copy the warning told them to expect.
+	opts.SkipSync = true
 
 	// Resolve source to a local directory.
 	sourceDir, isRemote, err := resolveSource(src, opts.StoreDir)
@@ -149,7 +155,10 @@ func selectSkillsTUI(skills []types.DetectedSkill) ([]string, error) {
 }
 
 // resolveSource returns the local directory for a source, cloning if needed.
-// isRemote is true when the source was a git repo.
+// isRemote is true when the source was a git repo. A failed pull is a warning,
+// not an error: the cached copy is good enough to browse and install from
+// offline. Callers must set installer.Options.SkipSync afterwards, since this
+// is the only sync the interactive commands perform.
 func resolveSource(src, storeDir string) (dir string, isRemote bool, err error) {
 	parsed, err := source.Parse(src)
 	if err != nil {

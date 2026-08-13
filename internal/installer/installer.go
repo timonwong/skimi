@@ -25,6 +25,10 @@ type Options struct {
 	DryRun   bool   // print what would be done without making changes
 	Verbose  bool   // reserved for additional installation detail
 	Additive bool   // keep installed skills that cfg does not name, instead of treating cfg as the full desired state
+	// SkipSync installs from the store copy as it is, without cloning or
+	// pulling. Callers that already synced the repo themselves set it so the
+	// same repo is not fetched twice; the zero value keeps the full sync.
+	SkipSync bool
 }
 
 // Run installs all packages declared in cfg and updates the lock file.
@@ -43,7 +47,7 @@ func Run(cfg *types.SkmConfig, opts Options) error {
 		if i > 0 {
 			fmt.Println()
 		}
-		prepared, err := preparePackage(pkg, defaultAgents, opts, true)
+		prepared, err := preparePackage(pkg, defaultAgents, opts, !opts.SkipSync)
 		if err != nil {
 			return err
 		}
@@ -256,7 +260,9 @@ type installCandidate struct {
 var validSkillName = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 // preparePackage resolves and validates a package without changing agent skill
-// directories or the lock file.
+// directories or the lock file. syncRemote clones or pulls a remote package
+// before reading it, and a failed pull aborts the install; callers that already
+// synced the repo pass false so the same repo is not fetched twice.
 func preparePackage(pkg types.SkillPackageConfig, defaultAgents []string, opts Options, syncRemote bool) ([]installCandidate, error) {
 	var sourceDir string
 	var repo, localPath, sourceIdentity string
