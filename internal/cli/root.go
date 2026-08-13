@@ -25,8 +25,9 @@ from git repositories or local paths into agent-specific skill directories.
 Inspired by reorx/skm (https://github.com/reorx/skm).`,
 }
 
-// Execute runs the root command.
-func Execute() error {
+// Execute runs the root command with the supplied build version.
+func Execute(version string) error {
+	rootCmd.Version = version
 	return rootCmd.Execute()
 }
 
