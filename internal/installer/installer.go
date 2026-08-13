@@ -119,7 +119,7 @@ func UpdateRepos(cfg *types.SkmConfig, repos []string, opts Options) error {
 		}
 
 		fmt.Println(ui.Blue.Render("Pulling " + repo + " ..."))
-		if err := ensureRepo(pkgs[0].cloneURL, dest); err != nil {
+		if err := EnsureRepo(opts.StoreDir, pkgs[0].cloneURL, dest); err != nil {
 			return err
 		}
 		newCommit, err := git.HeadCommit(dest)
@@ -330,7 +330,7 @@ func preparePackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 				} else {
 					dryRunFetch(dest, repo, oldCommit)
 				}
-			} else if err := ensureRepo(parsed.GetCloneURL(), dest); err != nil {
+			} else if err := EnsureRepo(opts.StoreDir, parsed.GetCloneURL(), dest); err != nil {
 				return nil, err
 			}
 		}
@@ -628,12 +628,89 @@ func linkLine(verb, skillName, agent, dstPath string) string {
 	return fmt.Sprintf("  %s %s -> [%s] %s", verb, skillName, agent, shortPath(dstPath))
 }
 
-// ensureRepo clones the repo if dest does not exist, or pulls if it does.
-func ensureRepo(repo, dest string) error {
+// EnsureRepo makes dest a current clone of repo, repairing a store copy git can
+// no longer use. The store is a cache skimi owns and can rebuild from the
+// remote, so two states that used to fail forever now heal themselves: a
+// directory that is not a usable clone (an interrupted clone, a leftover empty
+// dir) is re-cloned, and a clone whose upstream was force-pushed is reset onto
+// the remote state instead of failing --ff-only on every run.
+//
+// Repair only runs once the remote has proven reachable, so a fetch that fails
+// offline keeps the cached copy and reports the error with the store path in
+// it. dest must live inside storeDir; anything else is reported rather than
+// deleted, since skimi owns no path outside the store.
+func EnsureRepo(storeDir, repo, dest string) error {
 	if _, err := os.Stat(dest); os.IsNotExist(err) {
 		return git.Clone(repo, dest)
 	}
-	return git.Pull(dest)
+
+	if !git.IsRepoRoot(dest) {
+		return reclone(storeDir, repo, dest, "is not a usable git clone")
+	}
+
+	pullErr := git.Pull(dest)
+	if pullErr == nil {
+		return nil
+	}
+
+	// A fetch that still fails is a remote or network problem, not a broken
+	// store copy: keep what is cached and let the caller decide.
+	if err := git.Fetch(dest); err != nil {
+		return withStoreHint(dest, pullErr)
+	}
+
+	// The remote is reachable, so the local state is what blocks the
+	// fast-forward: a force-pushed upstream, or commits written into the store
+	// copy by hand. Follow the remote.
+	if err := git.ResetHardUpstream(dest); err != nil {
+		return reclone(storeDir, repo, dest, "cannot follow its upstream")
+	}
+	fmt.Fprintf(os.Stderr, "warning: store copy %s could not fast-forward; reset it to the upstream state\n", dest)
+	return nil
+}
+
+// reclone replaces the store copy at dest with a fresh clone of repo, telling
+// the user why on stderr. It removes dest only after confirming dest sits
+// inside storeDir, so a caller passing a path skimi does not own gets an error
+// instead of a deletion.
+func reclone(storeDir, repo, dest, reason string) error {
+	if !insideStore(storeDir, dest) {
+		return fmt.Errorf("refusing to re-clone %s: it %s, but it is outside the skimi store %s", dest, reason, storeDir)
+	}
+	fmt.Fprintf(os.Stderr, "warning: store copy %s %s; re-cloning it\n", dest, reason)
+	if err := os.RemoveAll(dest); err != nil {
+		return withStoreHint(dest, fmt.Errorf("remove broken store clone: %w", err))
+	}
+	if err := git.Clone(repo, dest); err != nil {
+		return withStoreHint(dest, err)
+	}
+	return nil
+}
+
+// insideStore reports whether dest is a path strictly below storeDir.
+func insideStore(storeDir, dest string) bool {
+	if storeDir == "" {
+		return false
+	}
+	absStore, err := filepath.Abs(storeDir)
+	if err != nil {
+		return false
+	}
+	absDest, err := filepath.Abs(dest)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absStore, absDest)
+	if err != nil {
+		return false
+	}
+	return rel != "." && filepath.IsLocal(rel)
+}
+
+// withStoreHint names the store path in an error the caller cannot recover
+// from, so the fix does not depend on knowing where skimi keeps its clones.
+func withStoreHint(dest string, err error) error {
+	return fmt.Errorf("sync store clone: %w\nhint: check the network, or remove the store copy at %s and retry", err, dest)
 }
 
 // dryRunFetch fetches dest read-only — git fetch only ever writes

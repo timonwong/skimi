@@ -155,10 +155,11 @@ func selectSkillsTUI(skills []types.DetectedSkill) ([]string, error) {
 }
 
 // resolveSource returns the local directory for a source, cloning if needed.
-// isRemote is true when the source was a git repo. A failed pull is a warning,
-// not an error: the cached copy is good enough to browse and install from
-// offline. Callers must set installer.Options.SkipSync afterwards, since this
-// is the only sync the interactive commands perform.
+// isRemote is true when the source was a git repo. A failed sync is a warning
+// rather than an error whenever a usable clone survives it: the cached copy is
+// good enough to browse and install from offline. Callers must set
+// installer.Options.SkipSync afterwards, since this is the only sync the
+// interactive commands perform.
 func resolveSource(src, storeDir string) (dir string, isRemote bool, err error) {
 	parsed, err := source.Parse(src)
 	if err != nil {
@@ -173,18 +174,20 @@ func resolveSource(src, storeDir string) (dir string, isRemote bool, err error) 
 		return expanded, false, nil
 	}
 
-	// Remote repo: clone/update
+	// Remote repo: clone, update, or repair the store copy.
 	dest := installer.RepoStorePath(storeDir, parsed.Repo)
 	if _, statErr := os.Stat(dest); os.IsNotExist(statErr) {
 		fmt.Println(ui.Blue.Render("Using " + parsed.Repo))
-		if err := git.Clone(parsed.GetCloneURL(), dest); err != nil {
-			return "", false, err
-		}
 	} else {
 		fmt.Println(ui.Blue.Render("Using existing " + parsed.Repo))
-		if err := git.Pull(dest); err != nil {
-			fmt.Fprintln(os.Stderr, ui.Red.Render("  Warning: git pull failed: "+err.Error()))
+	}
+	if err := installer.EnsureRepo(storeDir, parsed.GetCloneURL(), dest); err != nil {
+		// An offline sync is survivable as long as the cached copy is intact;
+		// without one there is nothing to browse, so the error stands.
+		if !git.IsRepoRoot(dest) {
+			return "", false, err
 		}
+		fmt.Fprintln(os.Stderr, ui.Red.Render("  Warning: repo sync failed, using the cached copy: "+err.Error()))
 	}
 
 	// Apply subdir if specified

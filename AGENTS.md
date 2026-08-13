@@ -20,7 +20,7 @@ internal/ui/styles.go          Shared lipgloss styles (leaf)
 internal/fileutil/fileutil.go  Shared AtomicWrite helper
 internal/config/config.go      skills.yaml read/write + DefaultPaths
 internal/lock/lock.go          skills-lock.yaml atomic read/write + FindByName
-internal/git/git.go            git CLI wrapper (Clone/Pull/Fetch/HeadCommit/RevParse/Log)
+internal/git/git.go            git CLI wrapper (Clone/Pull/Fetch/ResetHardUpstream/IsRepoRoot/HeadCommit/RevParse/Log)
 internal/detect/detect.go      SKILL.md scanner + frontmatter parser
 internal/linker/linker.go      symlink management, agent directory mapping, IsManagedLink
 internal/linker/junction.go    Mount point reparse data encoder (pure, testable on any OS)
@@ -65,5 +65,6 @@ internal/cli/                  Cobra commands: root install list view edit check
 - Deletion requires proof of ownership: paths failing `linker.IsManagedLink` (see its doc comment) are never deleted, only warned about
 - `applyPlan` is transactional: existing paths are renamed to backups, restored on any failure, and deleted only after the lock file saves
 - Duplicate names use deterministic last-wins resolution; `path` selectors disambiguate
+- The store is a disposable cache: `installer.EnsureRepo` re-clones a store dir git cannot use and resets onto a force-pushed upstream, but only after a fetch proves the remote is reachable, and only for paths inside `StoreDir`
 - SKILL.md scan: stops descending once SKILL.md is found in a directory (same as skm behaviour)
 - `target_dir` is deprecated, ignored, and retained only for v1 config compatibility
