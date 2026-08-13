@@ -61,8 +61,11 @@ func runInstallFromConfig(opts installer.Options) error {
 }
 
 // runInstallInteractive resolves the source, detects skills, presents a TUI
-// multi-select, and installs the chosen skills.
+// multi-select, and installs the chosen skills. Unlike the config-driven
+// path, it is additive: skills already installed stay untouched.
 func runInstallInteractive(src string, preselect []string, opts installer.Options) error {
+	opts.Additive = true
+
 	// Resolve source to a local directory.
 	sourceDir, isRemote, err := resolveSource(src, opts.StoreDir)
 	if err != nil {
@@ -108,7 +111,13 @@ func runInstallInteractive(src string, preselect []string, opts installer.Option
 	cfg := &types.SkmConfig{
 		Packages: []types.SkillPackageConfig{pkg},
 	}
-	return installer.Run(cfg, opts)
+	if err := installer.Run(cfg, opts); err != nil {
+		return err
+	}
+	if !opts.DryRun {
+		fmt.Println(ui.Dim.Render("Note: this install is not recorded in skills.yaml; a config-driven `skimi install` removes skills not declared there."))
+	}
+	return nil
 }
 
 // selectSkillsTUI shows a charmbracelet/huh multi-select form and returns the

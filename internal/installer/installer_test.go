@@ -482,6 +482,99 @@ func TestRunMigratesV1NestedLinkAndRejectsUnownedDestination(t *testing.T) {
 	}
 }
 
+func TestRunAdditiveKeepsUnrelatedSkills(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+	alphaSource := filepath.Join(dir, "alpha-source")
+	alphaSkill := filepath.Join(alphaSource, "alpha")
+	writeSkill(t, alphaSkill, "alpha")
+	betaSource := filepath.Join(dir, "beta-source")
+	writeSkill(t, filepath.Join(betaSource, "beta"), "beta")
+
+	alphaLink := filepath.Join(home, ".claude", "skills", "alpha")
+	if err := os.MkdirAll(filepath.Dir(alphaLink), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(alphaSkill, alphaLink); err != nil {
+		t.Fatal(err)
+	}
+
+	lockPath := filepath.Join(dir, "lock.yaml")
+	writeLock(t, lockPath, &types.LockFile{Skills: []types.InstalledSkill{{
+		Name: "alpha", LocalPath: alphaSource, SkillPath: alphaSkill, LinkedTo: []string{alphaLink},
+	}}})
+
+	cfg := &types.SkmConfig{
+		Agents:   &types.DefaultAgentsConfig{Default: []string{types.AgentClaude}},
+		Packages: []types.SkillPackageConfig{{LocalPath: betaSource}},
+	}
+	if err := Run(cfg, Options{LockPath: lockPath, Additive: true}); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	target, err := os.Readlink(alphaLink)
+	if err != nil || target != alphaSkill {
+		t.Fatalf("unrelated alpha link changed: %q %v", target, err)
+	}
+	lf := readLock(t, lockPath)
+	byName := make(map[string]types.InstalledSkill, len(lf.Skills))
+	for _, skill := range lf.Skills {
+		byName[skill.Name] = skill
+	}
+	if len(lf.Skills) != 2 {
+		t.Fatalf("lock entries = %d, want 2: %+v", len(lf.Skills), lf.Skills)
+	}
+	if byName["alpha"].SkillPath != alphaSkill {
+		t.Fatalf("alpha entry changed: %+v", byName["alpha"])
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".claude", "skills", "beta")); err != nil {
+		t.Fatalf("beta link missing: %v", err)
+	}
+}
+
+func TestRunAdditiveReplacesSameNameSkill(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+	oldSource := filepath.Join(dir, "old-source")
+	oldSkill := filepath.Join(oldSource, "wait")
+	writeSkill(t, oldSkill, "wait")
+	newSource := filepath.Join(dir, "new-source")
+	newSkill := filepath.Join(newSource, "wait")
+	writeSkill(t, newSkill, "wait")
+
+	link := filepath.Join(home, ".claude", "skills", "wait")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(oldSkill, link); err != nil {
+		t.Fatal(err)
+	}
+
+	lockPath := filepath.Join(dir, "lock.yaml")
+	writeLock(t, lockPath, &types.LockFile{Skills: []types.InstalledSkill{{
+		Name: "wait", LocalPath: oldSource, SkillPath: oldSkill, LinkedTo: []string{link},
+	}}})
+
+	cfg := &types.SkmConfig{
+		Agents:   &types.DefaultAgentsConfig{Default: []string{types.AgentClaude}},
+		Packages: []types.SkillPackageConfig{{LocalPath: newSource}},
+	}
+	if err := Run(cfg, Options{LockPath: lockPath, Additive: true}); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	target, err := os.Readlink(link)
+	if err != nil || target != newSkill {
+		t.Fatalf("link target = %q %v, want %q", target, err, newSkill)
+	}
+	lf := readLock(t, lockPath)
+	if len(lf.Skills) != 1 || lf.Skills[0].SkillPath != newSkill {
+		t.Fatalf("lock = %+v", lf.Skills)
+	}
+}
+
 func TestRunRefusesToReplaceUserDirAtLockClaimedPath(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")

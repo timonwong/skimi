@@ -58,6 +58,7 @@ No circular dependencies. `types` is the pure leaf; all packages flow up to `cli
 ## Key Design Decisions
 
 - Skills install flat into `<agentDir>/skills/<skill>` for every agent
+- Config-driven `install` is a full sync (config is the desired state); interactive `install <source>` is additive via `Options.Additive`, preserving unrelated lock entries
 - `target_dir` is deprecated, ignored, and retained only for v1 config compatibility
 - Duplicate names use deterministic last-wins resolution; `path` selectors disambiguate
 - SKILL.md scan: stops descending once SKILL.md is found in a directory (same as skm behaviour)

@@ -24,6 +24,7 @@ type Options struct {
 	LockPath string // path to the lock file
 	DryRun   bool   // print what would be done without making changes
 	Verbose  bool   // reserved for additional installation detail
+	Additive bool   // keep installed skills that cfg does not name, instead of treating cfg as the full desired state
 }
 
 // Run installs all packages declared in cfg and updates the lock file.
@@ -48,7 +49,30 @@ func Run(cfg *types.SkmConfig, opts Options) error {
 		}
 		candidates = append(candidates, prepared...)
 	}
-	return applyPlan(lf, resolveCollisions(candidates), opts)
+	winners := resolveCollisions(candidates)
+	if opts.Additive {
+		winners = append(preservedCandidates(lf, winners), winners...)
+	}
+	return applyPlan(lf, winners, opts)
+}
+
+// preservedCandidates returns lock entries whose names are not taken by any
+// fresh winner, marked preserved so applyPlan keeps their links and lock
+// entries untouched. Same-name entries are dropped: the fresh winner replaces
+// them (last wins).
+func preservedCandidates(lf *types.LockFile, winners []installCandidate) []installCandidate {
+	taken := make(map[string]struct{}, len(winners))
+	for _, winner := range winners {
+		taken[winner.entry.Name] = struct{}{}
+	}
+	var out []installCandidate
+	for _, skill := range lf.Skills {
+		if _, ok := taken[skill.Name]; ok {
+			continue
+		}
+		out = append(out, installCandidate{entry: skill, agents: agentLabels(skill.LinkedTo), preserved: true})
+	}
+	return out
 }
 
 // UpdateRepos updates the selected remote repos and preserves unrelated lock entries.
