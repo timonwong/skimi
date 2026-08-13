@@ -507,7 +507,11 @@ func TestRunRollsBackLinksWhenLockWriteFails(t *testing.T) {
 	if err := os.Chmod(lockDir, 0o555); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chmod(lockDir, 0o755)
+	t.Cleanup(func() {
+		if err := os.Chmod(lockDir, 0o755); err != nil {
+			t.Errorf("restore lock directory permissions: %v", err)
+		}
+	})
 	cfg := &types.SkmConfig{Agents: &types.DefaultAgentsConfig{Default: []string{types.AgentClaude}}, Packages: []types.SkillPackageConfig{{LocalPath: sourceDir}}}
 	if err := Run(cfg, Options{LockPath: lockPath}); err == nil {
 		t.Fatal("expected lock write failure")
