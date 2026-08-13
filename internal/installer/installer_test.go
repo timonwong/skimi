@@ -344,6 +344,94 @@ func TestUpdateReposUpToDateMigratesV1Lock(t *testing.T) {
 	}
 }
 
+// TestRunSkipSyncControlsRemoteSync pins the single-sync contract the
+// interactive install relies on: with SkipSync the store copy is installed as
+// it is, and the zero value still clones or pulls as before.
+func TestRunSkipSyncControlsRemoteSync(t *testing.T) {
+	tests := []struct {
+		name          string
+		skipSync      bool
+		breakRemote   bool
+		wantErr       bool
+		wantNewCommit bool
+	}{
+		{name: "skip sync installs from the cached copy while offline", skipSync: true, breakRemote: true},
+		{name: "full sync fails when the remote is unreachable", skipSync: false, breakRemote: true, wantErr: true},
+		{name: "skip sync keeps the cached commit", skipSync: true},
+		{name: "full sync pulls the new commit", skipSync: false, wantNewCommit: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			home := filepath.Join(dir, "home")
+			t.Setenv("HOME", home)
+
+			origin := filepath.Join(dir, "origin")
+			makeSkillRepo(t, origin, map[string]string{"alpha": "alpha v1"})
+
+			repoID := "github.com/example/cached"
+			storeDir := filepath.Join(dir, "store")
+			storeRepo := RepoStorePath(storeDir, repoID)
+			gitRun(t, dir, "clone", origin, storeRepo)
+			cachedCommit := gitHead(t, storeRepo)
+
+			makeSkillRepoCommit(t, origin, map[string]string{"alpha": "alpha v2"})
+			newCommit := gitHead(t, origin)
+			if tt.breakRemote {
+				// Any pull now fails loudly, so a successful Run proves none ran.
+				gitRun(t, storeRepo, "remote", "set-url", "origin", filepath.Join(dir, "missing-origin"))
+			}
+
+			lockPath := filepath.Join(dir, "lock.yaml")
+			cfg := &types.SkmConfig{
+				Agents:   &types.DefaultAgentsConfig{Default: []string{types.AgentClaude}},
+				Packages: []types.SkillPackageConfig{{Repo: repoID, Skills: selectors("alpha")}},
+			}
+
+			err := Run(cfg, Options{
+				StoreDir: storeDir,
+				LockPath: lockPath,
+				Additive: true,
+				SkipSync: tt.skipSync,
+			})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("Run() expected an error when the pull fails")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Run() error: %v", err)
+			}
+
+			lf := readLock(t, lockPath)
+			if len(lf.Skills) != 1 || lf.Skills[0].Name != "alpha" {
+				t.Fatalf("lock entries = %+v, want a single alpha entry", lf.Skills)
+			}
+			wantCommit, wantBody := cachedCommit, "alpha v1"
+			if tt.wantNewCommit {
+				wantCommit, wantBody = newCommit, "alpha v2"
+			}
+			if lf.Skills[0].Commit != wantCommit {
+				t.Fatalf("locked commit = %q, want %q", lf.Skills[0].Commit, wantCommit)
+			}
+			link := filepath.Join(home, ".claude", "skills", "alpha")
+			fi, err := os.Lstat(link)
+			if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+				t.Fatalf("alpha link: %v %v", fi, err)
+			}
+			body, err := os.ReadFile(filepath.Join(link, "SKILL.md"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(body), wantBody) {
+				t.Fatalf("linked SKILL.md = %q, want it to contain %q", body, wantBody)
+			}
+		})
+	}
+}
+
 func TestRunFlattensAndUsesDeterministicLastWinner(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
