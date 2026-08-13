@@ -10,6 +10,8 @@ import (
 	"github.com/timonwong/skimi/internal/git"
 	"github.com/timonwong/skimi/internal/installer"
 	"github.com/timonwong/skimi/internal/lock"
+	"github.com/timonwong/skimi/internal/source"
+	"github.com/timonwong/skimi/internal/types"
 )
 
 func newCheckUpdatesCmd() *cobra.Command {
@@ -26,7 +28,8 @@ func newCheckUpdatesCmd() *cobra.Command {
 				return err
 			}
 
-			// Build a commit map from the lock file.
+			// Build a commit map from the lock file, keyed by the normalized
+			// repo identifier (the same key installer writes to the lock).
 			lockedCommits := make(map[string]string)
 			for _, s := range lf.Skills {
 				if s.Repo != "" && s.Commit != "" {
@@ -34,43 +37,45 @@ func newCheckUpdatesCmd() *cobra.Command {
 				}
 			}
 
+			repos, err := normalizeCheckUpdateRepos(cfg.Packages)
+			if err != nil {
+				return err
+			}
+
 			anyUpdate := false
 
-			for _, pkg := range cfg.Packages {
-				if pkg.Repo == "" {
-					continue
-				}
-				dest := installer.RepoStorePath(globalStoreDir, pkg.Repo)
+			for _, repo := range repos {
+				dest := installer.RepoStorePath(globalStoreDir, repo)
 				if _, statErr := os.Stat(dest); os.IsNotExist(statErr) {
-					fmt.Printf("%-40s  not cloned\n", pkg.Repo)
+					fmt.Printf("%-40s  not cloned\n", repo)
 					continue
 				}
 
-				fmt.Printf("Fetching %s ...\n", pkg.Repo)
+				fmt.Printf("Fetching %s ...\n", repo)
 				if err := git.Fetch(dest); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: fetch %s: %v\n", pkg.Repo, err)
+					fmt.Fprintf(os.Stderr, "warning: fetch %s: %v\n", repo, err)
 					continue
 				}
 
-				localCommit := lockedCommits[pkg.Repo]
+				localCommit := lockedCommits[repo]
 				// After git fetch, FETCH_HEAD contains the fetched commit.
 				remoteCommit, err := git.RevParse(dest, "FETCH_HEAD")
 				if err != nil {
 					// Fall back to HEAD.
 					remoteCommit, err = git.HeadCommit(dest)
 					if err != nil {
-						fmt.Fprintf(os.Stderr, "warning: get remote HEAD for %s: %v\n", pkg.Repo, err)
+						fmt.Fprintf(os.Stderr, "warning: get remote HEAD for %s: %v\n", repo, err)
 						continue
 					}
 				}
 
 				if localCommit == remoteCommit {
-					fmt.Printf("  %s is up to date.\n", pkg.Repo)
+					fmt.Printf("  %s is up to date.\n", repo)
 					continue
 				}
 
 				anyUpdate = true
-				fmt.Printf("  %s has updates:\n", pkg.Repo)
+				fmt.Printf("  %s has updates:\n", repo)
 				if localCommit != "" {
 					log, _ := git.Log(dest, localCommit, remoteCommit)
 					if log != "" {
@@ -89,6 +94,39 @@ func newCheckUpdatesCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// normalizeCheckUpdateRepos parses each package's repo string through
+// source.Parse and returns the deduplicated, normalized remote repo
+// identifiers in first-seen order. Packages without a repo, and packages
+// resolving to a local source, are skipped. This mirrors how
+// installer.preparePackage and filterUpdateReposByConfig normalize repo
+// strings, so check-updates computes the same store path and lock key that
+// install/update use for shorthand (owner/repo), URL (https/https+.git/
+// git@), and subdir config forms. Packages that share a repo (e.g. via
+// different subdirs) collapse to a single entry so the repo is fetched and
+// reported once.
+func normalizeCheckUpdateRepos(pkgs []types.SkillPackageConfig) ([]string, error) {
+	seen := make(map[string]struct{}, len(pkgs))
+	var repos []string
+	for _, pkg := range pkgs {
+		if pkg.Repo == "" {
+			continue
+		}
+		parsed, err := source.Parse(pkg.Repo)
+		if err != nil {
+			return nil, fmt.Errorf("parse repo %q: %w", pkg.Repo, err)
+		}
+		if parsed.Kind != source.SourceRemote {
+			continue
+		}
+		if _, ok := seen[parsed.Repo]; ok {
+			continue
+		}
+		seen[parsed.Repo] = struct{}{}
+		repos = append(repos, parsed.Repo)
+	}
+	return repos, nil
 }
 
 func updateHint() string {
