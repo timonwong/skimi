@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/timonwong/skimi/internal/git"
 	"github.com/timonwong/skimi/internal/lock"
 	"github.com/timonwong/skimi/internal/types"
 )
@@ -1067,6 +1068,317 @@ func captureStdout(t *testing.T, fn func()) string {
 
 	_ = w.Close()
 	return <-done
+}
+
+// cloneStore clones origin into storeRepo the way a healthy store copy looks.
+func cloneStore(t *testing.T, origin, storeRepo string) {
+	t.Helper()
+	gitRun(t, filepath.Dir(origin), "clone", origin, storeRepo)
+}
+
+// redirectClones points cloneURL at a local origin through git's insteadOf
+// rewriting, so tests exercise the real clone path without network access.
+func redirectClones(t *testing.T, cloneURL, origin string) {
+	t.Helper()
+	gitconfig := filepath.Join(t.TempDir(), "gitconfig")
+	body := "[url \"" + filepath.ToSlash(origin) + "\"]\n\tinsteadOf = " + cloneURL + "\n"
+	if err := os.WriteFile(gitconfig, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", gitconfig)
+}
+
+// rewriteHistory replaces the tip commit of dir, the local stand-in for an
+// upstream force-push: the commit the store copy holds stops existing.
+func rewriteHistory(t *testing.T, dir, skill, content string) {
+	t.Helper()
+	body := []byte("---\nname: " + skill + "\ndescription: test skill\n---\n\n" + content + "\n")
+	if err := os.WriteFile(filepath.Join(dir, skill, "SKILL.md"), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "commit", "-a", "--amend", "-m", "rewritten history")
+}
+
+func skillBody(t *testing.T, repoDir, skill string) string {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join(repoDir, skill, "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
+
+// TestEnsureRepoSelfHeals pins the recovery contract for the store cache: a
+// directory git cannot use is re-cloned, an upstream that was force-pushed is
+// reset onto, and a remote that cannot be reached leaves the cached copy in
+// place instead of deleting the only usable copy.
+func TestEnsureRepoSelfHeals(t *testing.T) {
+	tests := []struct {
+		name string
+		// prepare leaves the store copy in the state under test and may move
+		// origin, which starts as a single commit holding "alpha v1".
+		prepare func(t *testing.T, origin, storeRepo string)
+		wantErr bool
+		// wantBody is the SKILL.md content the store copy must hold afterwards.
+		wantBody string
+	}{
+		{
+			name: "empty directory is re-cloned",
+			prepare: func(t *testing.T, _, storeRepo string) {
+				if err := os.MkdirAll(storeRepo, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantBody: "alpha v1",
+		},
+		{
+			name: "directory that is not a clone is re-cloned",
+			prepare: func(t *testing.T, _, storeRepo string) {
+				writeSkill(t, filepath.Join(storeRepo, "junk"), "junk")
+			},
+			wantBody: "alpha v1",
+		},
+		{
+			name: "interrupted clone is re-cloned",
+			prepare: func(t *testing.T, _, storeRepo string) {
+				if err := os.MkdirAll(storeRepo, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(storeRepo, ".git"), []byte("truncated\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantBody: "alpha v1",
+		},
+		{
+			name: "healthy clone fast-forwards",
+			prepare: func(t *testing.T, origin, storeRepo string) {
+				cloneStore(t, origin, storeRepo)
+				makeSkillRepoCommit(t, origin, map[string]string{"alpha": "alpha v2"})
+			},
+			wantBody: "alpha v2",
+		},
+		{
+			name: "force-pushed upstream is reset onto",
+			prepare: func(t *testing.T, origin, storeRepo string) {
+				cloneStore(t, origin, storeRepo)
+				rewriteHistory(t, origin, "alpha", "alpha rewritten")
+			},
+			wantBody: "alpha rewritten",
+		},
+		{
+			name: "unreachable remote keeps the cached copy",
+			prepare: func(t *testing.T, origin, storeRepo string) {
+				cloneStore(t, origin, storeRepo)
+				gitRun(t, storeRepo, "remote", "set-url", "origin", filepath.Join(filepath.Dir(origin), "missing-origin"))
+				makeSkillRepoCommit(t, origin, map[string]string{"alpha": "alpha v2"})
+			},
+			wantErr:  true,
+			wantBody: "alpha v1",
+		},
+	}
+
+	const repoID = "github.com/example/healed"
+	cloneURL := "https://" + repoID
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			origin := filepath.Join(dir, "origin")
+			makeSkillRepo(t, origin, map[string]string{"alpha": "alpha v1"})
+			redirectClones(t, cloneURL, origin)
+
+			storeDir := filepath.Join(dir, "store")
+			storeRepo := RepoStorePath(storeDir, repoID)
+			tt.prepare(t, origin, storeRepo)
+
+			err := EnsureRepo(storeDir, cloneURL, storeRepo)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("EnsureRepo() expected an error when the remote is unreachable")
+				}
+				if !strings.Contains(err.Error(), storeRepo) {
+					t.Errorf("EnsureRepo() error = %v, want it to name the store path %s", err, storeRepo)
+				}
+			} else if err != nil {
+				t.Fatalf("EnsureRepo() error: %v", err)
+			}
+
+			if !git.IsRepoRoot(storeRepo) {
+				t.Fatalf("%s is not a usable clone after EnsureRepo()", storeRepo)
+			}
+			if body := skillBody(t, storeRepo, "alpha"); !strings.Contains(body, tt.wantBody) {
+				t.Errorf("store SKILL.md = %q, want it to contain %q", body, tt.wantBody)
+			}
+			if !tt.wantErr && gitHead(t, storeRepo) != gitHead(t, origin) {
+				t.Errorf("store HEAD = %q, want origin HEAD %q", gitHead(t, storeRepo), gitHead(t, origin))
+			}
+		})
+	}
+}
+
+// TestEnsureRepoRefusesRecoveryOutsideStore keeps the destructive half of the
+// recovery inside the directory skimi owns.
+func TestEnsureRepoRefusesRecoveryOutsideStore(t *testing.T) {
+	const repoID = "github.com/example/outside"
+	cloneURL := "https://" + repoID
+
+	dir := t.TempDir()
+	origin := filepath.Join(dir, "origin")
+	makeSkillRepo(t, origin, map[string]string{"alpha": "alpha v1"})
+	redirectClones(t, cloneURL, origin)
+
+	storeDir := filepath.Join(dir, "store")
+	outside := filepath.Join(dir, "elsewhere", "github.com", "example", "outside")
+	precious := filepath.Join(outside, "keepme")
+	writeSkill(t, precious, "keepme")
+
+	err := EnsureRepo(storeDir, cloneURL, outside)
+	if err == nil {
+		t.Fatal("EnsureRepo() expected a refusal for a destination outside the store")
+	}
+	if !strings.Contains(err.Error(), storeDir) || !strings.Contains(err.Error(), outside) {
+		t.Errorf("EnsureRepo() error = %v, want it to name both %s and %s", err, outside, storeDir)
+	}
+	if _, statErr := os.Stat(filepath.Join(precious, "SKILL.md")); statErr != nil {
+		t.Fatalf("recovery deleted files outside the store: %v", statErr)
+	}
+}
+
+func TestInsideStore(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "store")
+	tests := []struct {
+		name  string
+		store string
+		dest  string
+		want  bool
+	}{
+		{name: "repo below the store", store: store, dest: filepath.Join(store, "github.com", "foo", "bar"), want: true},
+		{name: "store itself", store: store, dest: store},
+		{name: "sibling of the store", store: store, dest: filepath.Join(filepath.Dir(store), "other")},
+		{name: "parent of the store", store: store, dest: filepath.Dir(store)},
+		{name: "escaping traversal", store: store, dest: filepath.Join(store, "..", "other")},
+		{name: "empty store", store: "", dest: filepath.Join(store, "foo")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := insideStore(tt.store, tt.dest); got != tt.want {
+				t.Errorf("insideStore(%q, %q) = %v, want %v", tt.store, tt.dest, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRunHealsBrokenStoreClone drives the repair through the config-driven
+// install, the path a broken store dir used to fail on every run.
+func TestRunHealsBrokenStoreClone(t *testing.T) {
+	tests := []struct {
+		name       string
+		breakStore func(t *testing.T, storeRepo string)
+	}{
+		{
+			name: "empty store directory",
+			breakStore: func(t *testing.T, storeRepo string) {
+				if err := os.MkdirAll(storeRepo, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "store directory holding junk",
+			breakStore: func(t *testing.T, storeRepo string) {
+				writeSkill(t, filepath.Join(storeRepo, "junk"), "junk")
+			},
+		},
+	}
+
+	const repoID = "github.com/example/broken"
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			home := filepath.Join(dir, "home")
+			t.Setenv("HOME", home)
+
+			origin := filepath.Join(dir, "origin")
+			makeSkillRepo(t, origin, map[string]string{"alpha": "alpha v1"})
+			redirectClones(t, "https://"+repoID, origin)
+
+			storeDir := filepath.Join(dir, "store")
+			storeRepo := RepoStorePath(storeDir, repoID)
+			tt.breakStore(t, storeRepo)
+
+			lockPath := filepath.Join(dir, "lock.yaml")
+			cfg := &types.SkmConfig{
+				Agents:   &types.DefaultAgentsConfig{Default: []string{types.AgentClaude}},
+				Packages: []types.SkillPackageConfig{{Repo: repoID, Skills: selectors("alpha")}},
+			}
+			if err := Run(cfg, Options{StoreDir: storeDir, LockPath: lockPath}); err != nil {
+				t.Fatalf("Run() error: %v", err)
+			}
+
+			lf := readLock(t, lockPath)
+			if len(lf.Skills) != 1 || lf.Skills[0].Name != "alpha" {
+				t.Fatalf("lock entries = %+v, want a single alpha entry", lf.Skills)
+			}
+			if want := gitHead(t, origin); lf.Skills[0].Commit != want {
+				t.Errorf("locked commit = %q, want %q", lf.Skills[0].Commit, want)
+			}
+			link := filepath.Join(home, ".claude", "skills", "alpha")
+			if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+				t.Fatalf("alpha link: %v %v", fi, err)
+			}
+		})
+	}
+}
+
+// TestUpdateReposFollowsForcePushedUpstream covers the second dead end: a
+// rewritten upstream that git pull --ff-only refuses on every update.
+func TestUpdateReposFollowsForcePushedUpstream(t *testing.T) {
+	const repoID = "github.com/example/rewritten"
+
+	dir := t.TempDir()
+	t.Setenv("HOME", filepath.Join(dir, "home"))
+
+	origin := filepath.Join(dir, "origin")
+	makeSkillRepo(t, origin, map[string]string{"alpha": "alpha v1"})
+	redirectClones(t, "https://"+repoID, origin)
+
+	storeDir := filepath.Join(dir, "store")
+	storeRepo := RepoStorePath(storeDir, repoID)
+	cloneStore(t, origin, storeRepo)
+	oldCommit := gitHead(t, storeRepo)
+
+	rewriteHistory(t, origin, "alpha", "alpha rewritten")
+	newCommit := gitHead(t, origin)
+	if oldCommit == newCommit {
+		t.Fatal("rewriteHistory() did not change the origin commit")
+	}
+
+	lockPath := filepath.Join(dir, "lock.yaml")
+	writeLock(t, lockPath, &types.LockFile{Skills: []types.InstalledSkill{{
+		Name:      "alpha",
+		Repo:      repoID,
+		Commit:    oldCommit,
+		SkillPath: filepath.Join(storeRepo, "alpha"),
+	}}})
+
+	cfg := &types.SkmConfig{
+		Agents:   &types.DefaultAgentsConfig{Default: []string{types.AgentClaude}},
+		Packages: []types.SkillPackageConfig{{Repo: repoID, Skills: selectors("alpha")}},
+	}
+	if err := UpdateRepos(cfg, []string{repoID}, Options{StoreDir: storeDir, LockPath: lockPath}); err != nil {
+		t.Fatalf("UpdateRepos() error: %v", err)
+	}
+
+	lf := readLock(t, lockPath)
+	if len(lf.Skills) != 1 || lf.Skills[0].Commit != newCommit {
+		t.Fatalf("lock after update = %+v, want alpha at %q", lf.Skills, newCommit)
+	}
+	if body := skillBody(t, storeRepo, "alpha"); !strings.Contains(body, "alpha rewritten") {
+		t.Errorf("store SKILL.md = %q, want it to contain the rewritten content", body)
+	}
 }
 
 func bytesTrimSpace(b []byte) []byte {

@@ -3,7 +3,9 @@ package git
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -33,6 +35,30 @@ func Fetch(repoPath string) error {
 		return fmt.Errorf("git fetch in %s: %w\n%s", repoPath, err, out)
 	}
 	return nil
+}
+
+// ResetHardUpstream discards every local change and moves repoPath to the tip
+// of the branch it tracks. It recovers a clone whose upstream was force-pushed,
+// which git pull --ff-only refuses to follow. It fails when the checked-out
+// branch tracks nothing, so callers must handle that as a normal outcome.
+func ResetHardUpstream(repoPath string) error {
+	out, err := runIn(repoPath, "git", "reset", "--hard", "@{upstream}")
+	if err != nil {
+		return fmt.Errorf("git reset --hard @{upstream} in %s: %w\n%s", repoPath, err, out)
+	}
+	return nil
+}
+
+// IsRepoRoot reports whether repoPath is the root of a clone git can still
+// work with. It answers false for a directory that only sits inside another
+// repository: the .git entry has to belong to repoPath itself, so a store path
+// under an unrelated checkout is never mistaken for its own clone.
+func IsRepoRoot(repoPath string) bool {
+	if _, err := os.Lstat(filepath.Join(repoPath, ".git")); err != nil {
+		return false
+	}
+	_, err := runIn(repoPath, "git", "rev-parse", "--git-dir")
+	return err == nil
 }
 
 // HeadCommit returns the full SHA of HEAD in repoPath.
