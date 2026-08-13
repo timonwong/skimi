@@ -20,8 +20,8 @@ const skillFile = "SKILL.md"
 // If the scan directory itself contains SKILL.md, it is returned as a single skill.
 // Otherwise, subdirectories are scanned recursively.
 // When a SKILL.md is found the walk does not descend further into that
-// directory (matching skm behaviour). Returns one DetectedSkill per unique
-// skill name found; when duplicates exist the shallowest path wins.
+// directory (matching skm behaviour). Duplicate names are preserved so the
+// installer can apply deterministic last-wins resolution.
 func Scan(rootDir string) ([]types.DetectedSkill, error) {
 	// Priority: check for skills/ subdirectory first
 	scanDir := rootDir
@@ -37,6 +37,7 @@ func Scan(rootDir string) ([]types.DetectedSkill, error) {
 		if err != nil {
 			return nil, err
 		}
+		skill.SourcePath = "."
 		return []types.DetectedSkill{skill}, nil
 	}
 
@@ -45,49 +46,13 @@ func Scan(rootDir string) ([]types.DetectedSkill, error) {
 	if err := walk(scanDir, scanDir, &raw); err != nil {
 		return nil, err
 	}
-	return deduplicateSkills(raw, scanDir), nil
+	return raw, nil
 }
 
 // isDir reports whether path is a directory.
 func isDir(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
-}
-
-// deduplicateSkills returns skills with duplicate names removed, keeping the
-// entry whose SkillPath is shallowest relative to rootDir. A warning is printed
-// to stderr for every duplicate that is dropped.
-func deduplicateSkills(skills []types.DetectedSkill, rootDir string) []types.DetectedSkill {
-	type entry struct {
-		skill types.DetectedSkill
-		depth int
-		order int
-	}
-	best := make(map[string]entry, len(skills))
-	for i, s := range skills {
-		rel, _ := filepath.Rel(rootDir, s.SkillPath)
-		depth := strings.Count(filepath.ToSlash(rel), "/")
-		if prev, ok := best[s.Name]; !ok || depth < prev.depth {
-			if ok {
-				fmt.Fprintf(os.Stderr, "warning: duplicate skill %q: keeping %s, dropping %s\n",
-					s.Name, s.SkillPath, prev.skill.SkillPath)
-			}
-			best[s.Name] = entry{skill: s, depth: depth, order: i}
-		} else {
-			fmt.Fprintf(os.Stderr, "warning: duplicate skill %q: keeping %s, dropping %s\n",
-				s.Name, prev.skill.SkillPath, s.SkillPath)
-		}
-	}
-
-	// Rebuild in original insertion order for deterministic output.
-	out := make([]types.DetectedSkill, 0, len(best))
-	for _, s := range skills {
-		if e, ok := best[s.Name]; ok && e.skill.SkillPath == s.SkillPath {
-			out = append(out, s)
-			delete(best, s.Name)
-		}
-	}
-	return out
 }
 
 // walk is the recursive helper for Scan.
@@ -110,6 +75,11 @@ func walk(rootDir, dir string, skills *[]types.DetectedSkill) error {
 			if err != nil {
 				return err
 			}
+			rel, err := filepath.Rel(rootDir, sub)
+			if err != nil {
+				return fmt.Errorf("relative skill path %s: %w", sub, err)
+			}
+			skill.SourcePath = filepath.ToSlash(rel)
 			*skills = append(*skills, skill)
 			continue // do not descend further
 		}

@@ -10,6 +10,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const CurrentVersion = 2
+
 // Load reads and parses the lock file. If the file does not exist it returns
 // an empty LockFile rather than an error.
 func Load(path string) (*types.LockFile, error) {
@@ -24,6 +26,9 @@ func Load(path string) (*types.LockFile, error) {
 	var lf types.LockFile
 	if err := yaml.Unmarshal(data, &lf); err != nil {
 		return nil, fmt.Errorf("parse lock file %s: %w", path, err)
+	}
+	if lf.Version > CurrentVersion {
+		return nil, fmt.Errorf("lock file version %d is newer than supported version %d", lf.Version, CurrentVersion)
 	}
 	return &lf, nil
 }

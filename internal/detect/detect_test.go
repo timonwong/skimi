@@ -83,7 +83,7 @@ func TestScan(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := []types.DetectedSkill{
-			{Name: "root-skill", Description: "A root skill", SkillPath: dir},
+			{Name: "root-skill", Description: "A root skill", SkillPath: dir, SourcePath: "."},
 		}
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("Scan() mismatch (-want +got):\n%s", diff)
@@ -106,7 +106,7 @@ func TestScan(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := []types.DetectedSkill{
-			{Name: "my-skill", SkillPath: skillDir},
+			{Name: "my-skill", SkillPath: skillDir, SourcePath: "my-skill"},
 		}
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("Scan() mismatch (-want +got):\n%s", diff)
@@ -129,7 +129,7 @@ func TestScan(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := []types.DetectedSkill{
-			{Name: "nested", SkillPath: skillDir},
+			{Name: "nested", SkillPath: skillDir, SourcePath: "group/nested-skill"},
 		}
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("Scan() mismatch (-want +got):\n%s", diff)
@@ -162,7 +162,7 @@ func TestScan(t *testing.T) {
 		}
 		// Only skill from skills/ dir should be found
 		want := []types.DetectedSkill{
-			{Name: "skill-in-skills", SkillPath: skillsDirSkill},
+			{Name: "skill-in-skills", SkillPath: skillsDirSkill, SourcePath: "skill-in-skills"},
 		}
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("Scan() mismatch (-want +got):\n%s", diff)
@@ -185,7 +185,7 @@ func TestScan(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := []types.DetectedSkill{
-			{Name: "frontend-skill", Description: "A skill", SkillPath: skillDir},
+			{Name: "frontend-skill", Description: "A skill", SkillPath: skillDir, SourcePath: "my-skill"},
 		}
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("Scan() mismatch (-want +got):\n%s", diff)
@@ -289,7 +289,7 @@ func TestScan(t *testing.T) {
 		}
 	})
 
-	t.Run("deduplication: same name at different depths", func(t *testing.T) {
+	t.Run("same name at different depths is preserved", func(t *testing.T) {
 		dir := t.TempDir()
 
 		// Shallow: skills/planning-with-files/SKILL.md (depth 1)
@@ -315,7 +315,8 @@ func TestScan(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := []types.DetectedSkill{
-			{Name: "planning-with-files", SkillPath: shallowDir},
+			{Name: "planning-with-files", SkillPath: deepDir, SourcePath: "group/planning-with-files"},
+			{Name: "planning-with-files", SkillPath: shallowDir, SourcePath: "planning-with-files"},
 		}
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("Scan() mismatch (-want +got):\n%s", diff)

@@ -10,6 +10,14 @@ import (
 	"github.com/timonwong/skimi/internal/types"
 )
 
+func selectors(names ...string) []types.SkillSelector {
+	out := make([]types.SkillSelector, len(names))
+	for i, name := range names {
+		out[i] = types.SkillSelector{Name: name}
+	}
+	return out
+}
+
 func TestLoad(t *testing.T) {
 	t.Run("file not exist returns empty config", func(t *testing.T) {
 		cfg, err := Load(filepath.Join(t.TempDir(), "nonexistent.yaml"))
@@ -35,7 +43,7 @@ func TestLoad(t *testing.T) {
 		}
 		want := &types.SkmConfig{
 			Packages: []types.SkillPackageConfig{
-				{Repo: "github.com/foo/bar", Skills: []string{"my-skill"}},
+				{Repo: "github.com/foo/bar", Skills: selectors("my-skill")},
 			},
 		}
 		if diff := cmp.Diff(want, cfg); diff != "" {
@@ -54,6 +62,31 @@ func TestLoad(t *testing.T) {
 			t.Error("expected error for invalid yaml")
 		}
 	})
+
+	t.Run("unknown field returns error", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "skills.yaml")
+		if err := os.WriteFile(path, []byte("packages:\n  - local_path: ./skills\n    skils: [wait]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err == nil {
+			t.Fatal("expected unknown field error")
+		}
+	})
+
+	t.Run("path selector", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "skills.yaml")
+		if err := os.WriteFile(path, []byte("packages:\n  - local_path: ./skills\n    skills:\n      - wait\n      - path: group/then\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []types.SkillSelector{{Name: "wait"}, {Path: "group/then"}}
+		if diff := cmp.Diff(want, cfg.Packages[0].Skills); diff != "" {
+			t.Fatalf("selectors (-want +got):\n%s", diff)
+		}
+	})
 }
 
 func TestSave(t *testing.T) {
@@ -62,7 +95,7 @@ func TestSave(t *testing.T) {
 		path := filepath.Join(dir, "skills.yaml")
 		want := &types.SkmConfig{
 			Packages: []types.SkillPackageConfig{
-				{Repo: "github.com/a/b", Skills: []string{"s1", "s2"}},
+				{Repo: "github.com/a/b", Skills: selectors("s1", "s2")},
 			},
 		}
 		if err := Save(path, want); err != nil {

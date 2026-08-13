@@ -47,7 +47,7 @@ func newRemoveCmd() *cobra.Command {
 				return nil
 			}
 
-			newLF := &types.LockFile{Skills: remaining}
+			newLF := &types.LockFile{Version: lf.Version, Skills: remaining}
 			if err := lock.Save(globalLockFile, newLF); err != nil {
 				return fmt.Errorf("save lock file: %w", err)
 			}

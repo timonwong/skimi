@@ -43,7 +43,7 @@ skills and lets you select which ones to install interactively.`,
 	}
 
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print what would be done without making changes")
-	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "show override notices for existing links")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "show additional installation detail")
 	return cmd
 }
 
@@ -94,7 +94,10 @@ func runInstallInteractive(src string, preselect []string, opts installer.Option
 	// Build a minimal config for the chosen skills.
 	// Use the original src to preserve any subdir information.
 	pkg := types.SkillPackageConfig{
-		Skills: selectedNames,
+		Skills: make([]types.SkillSelector, len(selectedNames)),
+	}
+	for i, name := range selectedNames {
+		pkg.Skills[i] = types.SkillSelector{Name: name}
 	}
 	if isRemote {
 		pkg.Repo = src

@@ -25,8 +25,8 @@ func newListCmd() *cobra.Command {
 			}
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tSOURCE\tCOMMIT\tLINKS")
-			fmt.Fprintln(w, "----\t------\t------\t-----")
+			fmt.Fprintln(w, "NAME\tSOURCE\tPATH\tCOMMIT\tLINKS")
+			fmt.Fprintln(w, "----\t------\t----\t------\t-----")
 			for _, s := range lf.Skills {
 				source := s.Repo
 				if source == "" {
@@ -37,7 +37,7 @@ func newListCmd() *cobra.Command {
 					commit = commit[:8]
 				}
 				links := strings.Join(s.LinkedTo, "\n\t\t\t")
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.Name, source, commit, links)
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", s.Name, source, s.SourcePath, commit, links)
 			}
 			return w.Flush()
 		},

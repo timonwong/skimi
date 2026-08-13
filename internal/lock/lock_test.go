@@ -59,6 +59,16 @@ func TestLoad(t *testing.T) {
 			t.Error("expected error for invalid yaml")
 		}
 	})
+
+	t.Run("future version returns error", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "lock.yaml")
+		if err := os.WriteFile(path, []byte("version: 99\nskills: []\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err == nil {
+			t.Fatal("expected future version error")
+		}
+	})
 }
 
 func TestSave(t *testing.T) {
@@ -81,6 +91,21 @@ func TestSave(t *testing.T) {
 			t.Errorf("roundtrip mismatch (-want +got):\n%s", diff)
 		}
 	})
+}
+
+func TestSaveVersionTwo(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lock.yaml")
+	want := &types.LockFile{Version: CurrentVersion, Skills: []types.InstalledSkill{{Name: "wait", SourcePath: "group/wait", LinkedTo: []string{}}}}
+	if err := Save(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatalf("roundtrip (-want +got):\n%s", diff)
+	}
 }
 
 func TestFindByName(t *testing.T) {

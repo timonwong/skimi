@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 
+	"github.com/timonwong/skimi/internal/config"
 	"github.com/timonwong/skimi/internal/detect"
 	"github.com/timonwong/skimi/internal/git"
 	"github.com/timonwong/skimi/internal/linker"
@@ -20,76 +23,43 @@ type Options struct {
 	StoreDir string // root directory for cloned repos
 	LockPath string // path to the lock file
 	DryRun   bool   // print what would be done without making changes
-	Verbose  bool   // print extra detail such as override notices
+	Verbose  bool   // reserved for additional installation detail
 }
 
 // Run installs all packages declared in cfg and updates the lock file.
 func Run(cfg *types.SkmConfig, opts Options) error {
+	if err := config.Validate(cfg); err != nil {
+		return fmt.Errorf("validate config: %w", err)
+	}
 	lf, err := lock.Load(opts.LockPath)
 	if err != nil {
 		return fmt.Errorf("load lock file: %w", err)
 	}
 
-	// Build a set of currently installed skill names for stale-link detection.
-	oldLinks := make(map[string][]string, len(lf.Skills))
-	for _, s := range lf.Skills {
-		oldLinks[s.Name] = append(oldLinks[s.Name], s.LinkedTo...)
-	}
-
 	defaultAgents := resolveDefaultAgents(cfg)
-
-	var newSkills []types.InstalledSkill
-
+	var candidates []installCandidate
 	for i, pkg := range cfg.Packages {
 		if i > 0 {
 			fmt.Println()
 		}
-		installed, err := installPackage(pkg, defaultAgents, opts)
+		prepared, err := preparePackage(pkg, defaultAgents, opts, true)
 		if err != nil {
 			return err
 		}
-		newSkills = append(newSkills, installed...)
+		candidates = append(candidates, prepared...)
 	}
-
-	// Remove stale links that are no longer declared.
-	newSkillNames := make(map[string]struct{}, len(newSkills))
-	for _, s := range newSkills {
-		newSkillNames[s.Name] = struct{}{}
-	}
-
-	for name, links := range oldLinks {
-		if _, ok := newSkillNames[name]; ok {
-			continue
-		}
-		fmt.Printf("Removing stale skill %q\n", name)
-		if !opts.DryRun {
-			for _, link := range links {
-				if err := linker.RemoveLink(link); err != nil {
-					fmt.Fprintln(os.Stderr, ui.Red.Render("  Warning: remove link "+link+": "+err.Error()))
-				}
-			}
-		}
-	}
-
-	if !opts.DryRun {
-		newLF := &types.LockFile{Skills: newSkills}
-		if err := lock.Save(opts.LockPath, newLF); err != nil {
-			return fmt.Errorf("save lock file: %w", err)
-		}
-	}
-
-	return nil
+	return applyPlan(lf, resolveCollisions(candidates), opts)
 }
 
 // UpdateRepos updates the selected remote repos and preserves unrelated lock entries.
 func UpdateRepos(cfg *types.SkmConfig, repos []string, opts Options) error {
+	if err := config.Validate(cfg); err != nil {
+		return fmt.Errorf("validate config: %w", err)
+	}
 	lf, err := lock.Load(opts.LockPath)
 	if err != nil {
 		return fmt.Errorf("load lock file: %w", err)
 	}
-
-	defaultAgents := resolveDefaultAgents(cfg)
-	changedRepos := make(map[string][]types.InstalledSkill)
 
 	for i, repo := range repos {
 		if i > 0 {
@@ -130,34 +100,80 @@ func UpdateRepos(cfg *types.SkmConfig, repos []string, opts Options) error {
 				}
 			}
 		}
-
-		var installed []types.InstalledSkill
-		for _, pkg := range pkgs {
-			entries, err := installPackage(pkg.config, defaultAgents, opts)
+	}
+	defaultAgents := resolveDefaultAgents(cfg)
+	var candidates []installCandidate
+	changedRepos := make(map[string]struct{}, len(repos))
+	for _, repo := range repos {
+		changedRepos[repo] = struct{}{}
+	}
+	declaredSources := make(map[string]struct{}, len(cfg.Packages))
+	for _, pkg := range cfg.Packages {
+		if pkg.Repo != "" {
+			parsed, err := source.Parse(pkg.Repo)
 			if err != nil {
 				return err
 			}
-			installed = append(installed, entries...)
-		}
-		changedRepos[repo] = installed
-	}
-
-	if len(changedRepos) == 0 {
-		return nil
-	}
-
-	newLF := replaceUpdatedRepoEntries(lf, repos, changedRepos)
-	if err := removeReplacedLinks(lf, newLF, changedRepos, opts); err != nil {
-		return err
-	}
-
-	if !opts.DryRun {
-		if err := lock.Save(opts.LockPath, newLF); err != nil {
-			return fmt.Errorf("save lock file: %w", err)
+			declaredSources["repo:"+parsed.Repo] = struct{}{}
+		} else {
+			declaredSources["local:"+pkg.LocalPath] = struct{}{}
 		}
 	}
-	fmt.Println("Lock file updated.")
-	return nil
+	for _, skill := range lf.Skills {
+		key := "repo:" + skill.Repo
+		if skill.Repo == "" {
+			key = "local:" + skill.LocalPath
+		}
+		if _, declared := declaredSources[key]; !declared {
+			candidates = append(candidates, installCandidate{entry: skill, agents: agentLabels(skill.LinkedTo), preserved: true})
+		}
+	}
+	for _, pkg := range cfg.Packages {
+		var repoID string
+		if pkg.Repo != "" {
+			parsed, err := source.Parse(pkg.Repo)
+			if err != nil {
+				return err
+			}
+			repoID = parsed.Repo
+		}
+		if _, isChanged := changedRepos[repoID]; isChanged {
+			prepared, err := preparePackage(pkg, defaultAgents, opts, false)
+			if err != nil {
+				return err
+			}
+			candidates = append(candidates, prepared...)
+			continue
+		}
+		for _, skill := range lf.Skills {
+			if (repoID != "" && skill.Repo == repoID) || (pkg.LocalPath != "" && skill.LocalPath == pkg.LocalPath) {
+				candidates = append(candidates, installCandidate{entry: skill, agents: agentLabels(skill.LinkedTo), preserved: true})
+			}
+		}
+	}
+	return applyPlan(lf, resolveCollisions(candidates), opts)
+}
+
+func agentLabels(links []string) []string {
+	out := make([]string, len(links))
+	for i, link := range links {
+		slash := filepath.ToSlash(link)
+		switch {
+		case strings.Contains(slash, "/.claude/skills/"):
+			out[i] = types.AgentClaude
+		case strings.Contains(slash, "/.agents/skills/"):
+			out[i] = types.AgentStandard
+		case strings.Contains(slash, "/.codex/skills/"):
+			out[i] = types.AgentCodex
+		case strings.Contains(slash, "/.openclaw/skills/"):
+			out[i] = types.AgentOpenClaw
+		case strings.Contains(slash, "/.pi/agent/skills/"):
+			out[i] = types.AgentPi
+		default:
+			out[i] = "unknown"
+		}
+	}
+	return out
 }
 
 type repoPackage struct {
@@ -200,50 +216,6 @@ func lockedRepoCommit(lf *types.LockFile, repo string) string {
 	return ""
 }
 
-func replaceUpdatedRepoEntries(lf *types.LockFile, repos []string, changedRepos map[string][]types.InstalledSkill) *types.LockFile {
-	newLF := &types.LockFile{}
-	for _, skill := range lf.Skills {
-		if _, changed := changedRepos[skill.Repo]; changed {
-			continue
-		}
-		newLF.Skills = append(newLF.Skills, skill)
-	}
-	for _, repo := range repos {
-		if skills, changed := changedRepos[repo]; changed {
-			newLF.Skills = append(newLF.Skills, skills...)
-		}
-	}
-	return newLF
-}
-
-func removeReplacedLinks(oldLF, newLF *types.LockFile, changedRepos map[string][]types.InstalledSkill, opts Options) error {
-	newLinks := make(map[string]struct{})
-	for _, skill := range newLF.Skills {
-		for _, link := range skill.LinkedTo {
-			newLinks[link] = struct{}{}
-		}
-	}
-
-	for _, skill := range oldLF.Skills {
-		if _, changed := changedRepos[skill.Repo]; !changed {
-			continue
-		}
-		for _, link := range skill.LinkedTo {
-			if _, keep := newLinks[link]; keep {
-				continue
-			}
-			fmt.Printf("Removing stale link %s\n", shortPath(link))
-			if opts.DryRun {
-				continue
-			}
-			if err := linker.RemoveLink(link); err != nil {
-				return fmt.Errorf("remove stale link %s: %w", link, err)
-			}
-		}
-	}
-	return nil
-}
-
 func shortCommit(commit string) string {
 	if len(commit) <= 8 {
 		return commit
@@ -251,11 +223,19 @@ func shortCommit(commit string) string {
 	return commit[:8]
 }
 
-// installPackage processes a single SkillPackageConfig and returns the
-// InstalledSkill entries it produced.
-func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts Options) ([]types.InstalledSkill, error) {
+type installCandidate struct {
+	entry     types.InstalledSkill
+	agents    []string
+	preserved bool
+}
+
+var validSkillName = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
+// preparePackage resolves and validates a package without changing agent skill
+// directories or the lock file.
+func preparePackage(pkg types.SkillPackageConfig, defaultAgents []string, opts Options, syncRemote bool) ([]installCandidate, error) {
 	var sourceDir string
-	var repo, localPath string
+	var repo, localPath, sourceIdentity string
 
 	switch {
 	case pkg.Repo != "":
@@ -278,14 +258,20 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 			fmt.Println(ui.Blue.Render("Using existing " + repo))
 		}
 
-		if err := ensureRepo(parsed.GetCloneURL(), dest); err != nil {
-			return nil, err
+		if syncRemote {
+			if err := ensureRepo(parsed.GetCloneURL(), dest); err != nil {
+				return nil, err
+			}
 		}
 
 		// Apply subdir if specified in the source
 		sourceDir = dest
 		if parsed.Subdir != "" {
 			sourceDir = filepath.Join(dest, parsed.Subdir)
+		}
+		sourceIdentity = parsed.Repo
+		if parsed.Subdir != "" {
+			sourceIdentity += "/" + filepath.ToSlash(filepath.Clean(parsed.Subdir))
 		}
 
 	case pkg.LocalPath != "":
@@ -295,6 +281,7 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 			return nil, err
 		}
 		sourceDir = expanded
+		sourceIdentity = filepath.Clean(expanded)
 		fmt.Println(ui.Blue.Render("Using local path " + pkg.LocalPath))
 
 	default:
@@ -307,9 +294,18 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 		return nil, fmt.Errorf("detect skills in %s: %w", sourceDir, err)
 	}
 
-	// Filter to the requested skills if specified.
+	for _, skill := range detected {
+		if len(skill.Name) > 64 || !validSkillName.MatchString(skill.Name) {
+			return nil, fmt.Errorf("invalid skill name %q at %s: use lowercase letters, numbers, and hyphens (maximum 64 characters)", skill.Name, skill.SkillPath)
+		}
+	}
+	sort.SliceStable(detected, func(i, j int) bool { return detected[i].SourcePath < detected[j].SourcePath })
+
 	if len(pkg.Skills) > 0 {
-		detected = filterSkills(detected, pkg.Skills)
+		detected, err = selectSkills(detected, pkg.Skills)
+		if err != nil {
+			return nil, fmt.Errorf("select skills from %s: %w", sourceIdentity, err)
+		}
 	}
 
 	skillNames := make([]string, len(detected))
@@ -326,21 +322,28 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 
 	// Determine agent list for this package.
 	agents := resolvePackageAgents(pkg, defaultAgents)
+	if pkg.TargetDir != "" {
+		fmt.Fprintf(os.Stderr, "warning: target_dir %q is deprecated and ignored; skills are installed flat\n", pkg.TargetDir)
+	}
 
-	var installed []types.InstalledSkill
+	var candidates []installCandidate
 
 	for _, skill := range detected {
-		fmt.Println(ui.Yellow.Render("  Install skill " + skill.Name))
-		links, err := linkSkill(skill, agents, pkg.TargetDir, opts)
-		if err != nil {
-			return nil, err
+		links := make([]string, 0, len(agents))
+		for _, agent := range agents {
+			dstPath, err := linker.SkillLinkPath(agent, skill.Name)
+			if err != nil {
+				return nil, err
+			}
+			links = append(links, dstPath)
 		}
 
 		entry := types.InstalledSkill{
-			Name:      skill.Name,
-			SkillPath: skill.SkillPath,
-			TargetDir: pkg.TargetDir,
-			LinkedTo:  links,
+			Name:       skill.Name,
+			Source:     sourceIdentity,
+			SkillPath:  skill.SkillPath,
+			SourcePath: skill.SourcePath,
+			LinkedTo:   links,
 		}
 		if repo != "" {
 			entry.Repo = repo
@@ -349,39 +352,203 @@ func installPackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 			entry.LocalPath = localPath
 		}
 
-		installed = append(installed, entry)
+		candidates = append(candidates, installCandidate{entry: entry, agents: append([]string(nil), agents...)})
 	}
 
-	return installed, nil
+	return candidates, nil
 }
 
-// linkSkill creates links for skill in each agent's skills directory.
-func linkSkill(skill types.DetectedSkill, agents []string, targetDir string, opts Options) ([]string, error) {
-	var links []string
-	for _, agent := range agents {
-		dstPath, err := linker.SkillLinkPath(agent, targetDir, skill.Name)
-		if err != nil {
-			return nil, err
+func resolveCollisions(candidates []installCandidate) []installCandidate {
+	winners := make(map[string]int, len(candidates))
+	var out []installCandidate
+	for _, candidate := range candidates {
+		if index, ok := winners[candidate.entry.Name]; ok {
+			loser := out[index]
+			fmt.Fprintf(os.Stderr, "warning: skill %q from %s/%s is overridden by %s/%s (last wins)\n",
+				candidate.entry.Name, loser.entry.Source, loser.entry.SourcePath, candidate.entry.Source, candidate.entry.SourcePath)
+			out[index] = candidate
+			continue
 		}
-		if opts.DryRun {
-			fmt.Println(ui.Dim.Render(linkLine("Skipped", skill.Name, agent, dstPath)))
-		} else {
-			var exists bool
-			if opts.Verbose {
-				_, lstatErr := os.Lstat(dstPath)
-				exists = lstatErr == nil
-			}
-			if err := linker.CreateLink(skill.SkillPath, dstPath, agent); err != nil {
-				return nil, fmt.Errorf("create link for %s in agent %s: %w", skill.Name, agent, err)
-			}
-			if exists {
-				fmt.Println(ui.Magenta.Render(linkLine("Overriding", skill.Name, agent, dstPath)))
-			}
-			fmt.Println(linkLine("Linked", skill.Name, agent, dstPath))
-		}
-		links = append(links, dstPath)
+		winners[candidate.entry.Name] = len(out)
+		out = append(out, candidate)
 	}
-	return links, nil
+	return out
+}
+
+type replacedLink struct {
+	path   string
+	backup string
+}
+
+func applyPlan(old *types.LockFile, winners []installCandidate, opts Options) error {
+	owned := make(map[string]string)
+	for _, skill := range old.Skills {
+		for _, link := range skill.LinkedTo {
+			owned[link] = skill.SkillPath
+		}
+	}
+
+	for _, candidate := range winners {
+		if candidate.preserved {
+			continue
+		}
+		for _, dst := range candidate.entry.LinkedTo {
+			fi, err := os.Lstat(dst)
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err != nil {
+				return fmt.Errorf("preflight destination %s: %w", dst, err)
+			}
+			if _, ok := owned[dst]; ok {
+				continue
+			}
+			if fi.Mode()&os.ModeSymlink != 0 {
+				target, err := os.Readlink(dst)
+				if err == nil && sameLinkTarget(dst, target, candidate.entry.SkillPath) {
+					continue
+				}
+			}
+			return fmt.Errorf("destination %s exists and is not managed by skimi", dst)
+		}
+	}
+
+	newLinks := make(map[string]struct{})
+	for _, winner := range winners {
+		for _, link := range winner.entry.LinkedTo {
+			newLinks[link] = struct{}{}
+		}
+	}
+	var stale []string
+	for _, skill := range old.Skills {
+		for _, link := range skill.LinkedTo {
+			if _, keep := newLinks[link]; !keep {
+				stale = append(stale, link)
+			}
+		}
+	}
+	sort.Strings(stale)
+
+	if opts.DryRun {
+		for _, winner := range winners {
+			if winner.preserved {
+				continue
+			}
+			fmt.Println(ui.Yellow.Render("  Install skill " + winner.entry.Name))
+			for i, dst := range winner.entry.LinkedTo {
+				fmt.Println(ui.Dim.Render(linkLine("Would link", winner.entry.Name, winner.agents[i], dst)))
+			}
+		}
+		for _, link := range stale {
+			fmt.Println(ui.Dim.Render("  Would remove stale link " + shortPath(link)))
+		}
+		return nil
+	}
+
+	var created []string
+	var replaced []replacedLink
+	rollback := func() {
+		for i := len(created) - 1; i >= 0; i-- {
+			_ = linker.RemoveLink(created[i])
+		}
+		for i := len(replaced) - 1; i >= 0; i-- {
+			_ = os.MkdirAll(filepath.Dir(replaced[i].path), 0o755)
+			_ = os.Rename(replaced[i].backup, replaced[i].path)
+		}
+	}
+
+	for _, winner := range winners {
+		if winner.preserved {
+			continue
+		}
+		fmt.Println(ui.Yellow.Render("  Install skill " + winner.entry.Name))
+		for i, dst := range winner.entry.LinkedTo {
+			if _, err := os.Lstat(dst); err == nil {
+				if opts.Verbose {
+					fmt.Println(ui.Magenta.Render(linkLine("Replacing", winner.entry.Name, winner.agents[i], dst)))
+				}
+				backup := backupPath(dst)
+				if err := os.Rename(dst, backup); err != nil {
+					rollback()
+					return fmt.Errorf("backup link %s: %w", dst, err)
+				}
+				replaced = append(replaced, replacedLink{path: dst, backup: backup})
+			}
+			if err := linker.CreateLink(winner.entry.SkillPath, dst); err != nil {
+				rollback()
+				return fmt.Errorf("create link for %s in agent %s: %w", winner.entry.Name, winner.agents[i], err)
+			}
+			created = append(created, dst)
+			fmt.Println(linkLine("Linked", winner.entry.Name, winner.agents[i], dst))
+		}
+	}
+
+	for _, link := range stale {
+		if _, err := os.Lstat(link); os.IsNotExist(err) {
+			continue
+		}
+		backup := backupPath(link)
+		if err := os.Rename(link, backup); err != nil {
+			rollback()
+			return fmt.Errorf("backup stale link %s: %w", link, err)
+		}
+		replaced = append(replaced, replacedLink{path: link, backup: backup})
+		removeEmptyParents(link)
+	}
+
+	entries := make([]types.InstalledSkill, len(winners))
+	for i, winner := range winners {
+		entries[i] = winner.entry
+	}
+	if err := lock.Save(opts.LockPath, &types.LockFile{Version: lock.CurrentVersion, Skills: entries}); err != nil {
+		rollback()
+		return fmt.Errorf("save lock file: %w", err)
+	}
+	for _, item := range replaced {
+		if err := linker.RemoveLink(item.backup); err != nil {
+			fmt.Fprintln(os.Stderr, "warning: remove transaction backup "+item.backup+": "+err.Error())
+			continue
+		}
+		removeEmptyParents(item.backup)
+	}
+	return nil
+}
+
+func backupPath(path string) string {
+	for i := 0; ; i++ {
+		candidate := fmt.Sprintf("%s.skimi-backup-%d", path, i)
+		if _, err := os.Lstat(candidate); os.IsNotExist(err) {
+			return candidate
+		}
+	}
+}
+
+func sameLinkTarget(linkPath, target, sourcePath string) bool {
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(linkPath), target)
+	}
+	return filepath.Clean(target) == filepath.Clean(sourcePath)
+}
+
+func removeEmptyParents(path string) {
+	parent := filepath.Dir(path)
+	for {
+		if filepath.Base(parent) == "skills" {
+			return
+		}
+		entries, err := os.ReadDir(parent)
+		if err != nil || len(entries) != 0 {
+			return
+		}
+		if err := os.Remove(parent); err != nil {
+			return
+		}
+		next := filepath.Dir(parent)
+		if next == parent {
+			return
+		}
+		parent = next
+	}
 }
 
 // linkLine formats a link status line: "  <verb> <skill> -> [<agent>] <path>".
@@ -429,19 +596,31 @@ func ExpandPath(p string) (string, error) {
 	return filepath.Abs(p)
 }
 
-// filterSkills returns only the detected skills whose names appear in want.
-func filterSkills(all []types.DetectedSkill, want []string) []types.DetectedSkill {
-	wantSet := make(map[string]struct{}, len(want))
-	for _, w := range want {
-		wantSet[w] = struct{}{}
-	}
-	var out []types.DetectedSkill
-	for _, s := range all {
-		if _, ok := wantSet[s.Name]; ok {
-			out = append(out, s)
+func selectSkills(all []types.DetectedSkill, selectors []types.SkillSelector) ([]types.DetectedSkill, error) {
+	selected := make(map[string]types.DetectedSkill)
+	for _, selector := range selectors {
+		matched := false
+		for _, skill := range all {
+			if (selector.Name != "" && skill.Name == selector.Name) || (selector.Path != "" && skill.SourcePath == selector.Path) {
+				selected[skill.SourcePath] = skill
+				matched = true
+			}
+		}
+		if !matched {
+			if selector.Path != "" {
+				return nil, fmt.Errorf("path %q did not match any skill", selector.Path)
+			}
+			return nil, fmt.Errorf("name %q did not match any skill", selector.Name)
 		}
 	}
-	return out
+	out := make([]types.DetectedSkill, 0, len(selected))
+	for _, skill := range all {
+		if _, ok := selected[skill.SourcePath]; ok {
+			out = append(out, skill)
+			delete(selected, skill.SourcePath)
+		}
+	}
+	return out, nil
 }
 
 // resolveDefaultAgents returns the default agent list from cfg, falling back
