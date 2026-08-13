@@ -90,10 +90,10 @@ go install github.com/timonwong/skimi/cmd/skimi@latest
 ## Usage
 
 ```bash
-# Install all skills from skills.yaml
+# Install all skills from skills.yaml (full sync: removes skills not declared there)
 skimi install
 
-# Interactively install from a source
+# Interactively install from a source (additive: other installed skills stay)
 skimi install github.com/example/ai-skills
 
 # List installed skills

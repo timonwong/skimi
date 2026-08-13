@@ -61,6 +61,40 @@ func RemoveLink(dstPath string) error {
 	return removeExisting(dstPath)
 }
 
+// IsManagedLink reports whether dstPath is a link skimi installed for the
+// skill at srcPath: either a symlink resolving to srcPath, or a legacy
+// hardlink tree whose SKILL.md still shares an inode with srcPath's SKILL.md.
+// Anything else (user files, replaced directories, symlinks pointing
+// elsewhere) is not skimi's to delete.
+func IsManagedLink(dstPath, srcPath string) bool {
+	fi, err := os.Lstat(dstPath)
+	if err != nil {
+		return false
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Readlink(dstPath)
+		if err != nil {
+			return false
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(dstPath), target)
+		}
+		return filepath.Clean(target) == filepath.Clean(srcPath)
+	}
+	if !fi.IsDir() {
+		return false
+	}
+	dstMD, err := os.Stat(filepath.Join(dstPath, "SKILL.md"))
+	if err != nil {
+		return false
+	}
+	srcMD, err := os.Stat(filepath.Join(srcPath, "SKILL.md"))
+	if err != nil {
+		return false
+	}
+	return os.SameFile(dstMD, srcMD)
+}
+
 // removeExisting removes dstPath whether it is a symlink, file, or directory.
 func removeExisting(path string) error {
 	fi, err := os.Lstat(path)
