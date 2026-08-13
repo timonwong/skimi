@@ -5,6 +5,7 @@
 ```bash
 go build ./cmd/skimi          # compile
 go vet ./...                  # static analysis
+golangci-lint run             # what CI's Lint step runs; vet alone misses it
 go test -race -count=1 ./...  # run all tests
 goreleaser build --snapshot   # verify release build
 ```
@@ -12,22 +13,22 @@ goreleaser build --snapshot   # verify release build
 ## Architecture
 
 ```
-cmd/skimi/main.go              Entry point (13 lines, calls cli.Execute)
-internal/types/types.go        All shared data types (leaf node, no internal deps)
+cmd/skimi/main.go              Entry point
+internal/types/types.go        All shared data types (leaf, no internal deps)
+internal/source/source.go      Source-string parser: shorthand/URL/local path → ParsedSource (leaf)
+internal/ui/styles.go          Shared lipgloss styles (leaf)
 internal/fileutil/fileutil.go  Shared AtomicWrite helper
 internal/config/config.go      skills.yaml read/write + DefaultPaths
 internal/lock/lock.go          skills-lock.yaml atomic read/write + FindByName
 internal/git/git.go            git CLI wrapper (Clone/Pull/Fetch/HeadCommit/RevParse/Log)
 internal/detect/detect.go      SKILL.md scanner + frontmatter parser
-internal/linker/linker.go      symlink management and agent directory mapping
-internal/installer/installer.go Core install orchestration: Run, RepoStorePath, ExpandPath
-internal/cli/                  Cobra commands: root install list view check-updates update remove
+internal/linker/linker.go      symlink management, agent directory mapping, IsManagedLink
+internal/installer/installer.go Install/update orchestration + the applyPlan transaction
+internal/cli/                  Cobra commands: root install list view edit check-updates update remove
 ```
 
 **Dependency order** (bottom → top):
-`types` → `fileutil`, `config`, `lock`, `git`, `detect`, `linker` → `installer` → `cli` → `cmd/skimi`
-
-No circular dependencies. `types` is the pure leaf; all packages flow up to `cli`.
+`types`, `source`, `ui` → `fileutil`, `config`, `lock`, `git`, `detect`, `linker` → `installer` → `cli` → `cmd/skimi`
 
 ## Default Paths
 
@@ -39,13 +40,13 @@ No circular dependencies. `types` is the pure leaf; all packages flow up to `cli
 
 ## Agent Skill Directories
 
-| Agent constant | Directory | Link type |
-|---|---|---|
-| `AgentClaude` | `~/.claude/skills/` | symlink |
-| `AgentCodex` | `~/.codex/skills/` | symlink |
-| `AgentPi` | `~/.pi/agent/skills/` | symlink |
-| `AgentStandard` | `~/.agents/skills/` | symlink |
-| `AgentOpenClaw` | `~/.openclaw/skills/` | symlink |
+| Agent constant | Directory |
+|---|---|
+| `AgentClaude` | `~/.claude/skills/` |
+| `AgentCodex` | `~/.codex/skills/` |
+| `AgentPi` | `~/.pi/agent/skills/` |
+| `AgentStandard` | `~/.agents/skills/` |
+| `AgentOpenClaw` | `~/.openclaw/skills/` |
 
 ## Code Conventions
 
@@ -57,12 +58,10 @@ No circular dependencies. `types` is the pure leaf; all packages flow up to `cli
 
 ## Key Design Decisions
 
-- Skills install flat into `<agentDir>/skills/<skill>` for every agent
+- Skills install flat, as directory symlinks, into `<agentDir>/skills/<skill>` for every agent
 - Config-driven `install` is a full sync (config is the desired state); interactive `install <source>` is additive via `Options.Additive`, preserving unrelated lock entries
-- `target_dir` is deprecated, ignored, and retained only for v1 config compatibility
+- Deletion requires proof of ownership: paths failing `linker.IsManagedLink` (see its doc comment) are never deleted, only warned about
+- `applyPlan` is transactional: existing paths are renamed to backups, restored on any failure, and deleted only after the lock file saves
 - Duplicate names use deterministic last-wins resolution; `path` selectors disambiguate
 - SKILL.md scan: stops descending once SKILL.md is found in a directory (same as skm behaviour)
-- Every agent uses directory symlinks
-- Deletion requires proof of ownership: `linker.IsManagedLink` accepts only a symlink resolving to the recorded SkillPath or a legacy hardlink tree whose SKILL.md shares the source's inode; anything else is left in place
-- Lock file written atomically; never partially updated
-- `installer.RepoStorePath` and `installer.ExpandPath` are exported for reuse by the CLI layer
+- `target_dir` is deprecated, ignored, and retained only for v1 config compatibility
