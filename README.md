@@ -6,22 +6,22 @@ A Go implementation of a skill manager for AI agents — inspired by [reorx/skm]
 
 `skimi` manages AI agent skills across multiple agent platforms. It reads a declarative
 configuration file (`skills.yaml`) and installs skills from git repositories or local paths
-into agent-specific skill directories, creating symlinks or hardlinks as appropriate.
+into agent-specific skill directories using flat symlinks.
 
 **Credit**: This project is based on the design and configuration format of
 [skm](https://github.com/reorx/skm) by [reorx](https://github.com/reorx).
 The core concepts (SKILL.md detection, lock file, agent directory conventions) are
-preserved for compatibility. skimi adds Go performance, subdirectory installation support
-(`target_dir`), and an interactive TUI for ad-hoc installs.
+preserved for compatibility. skimi adds Go performance, repository subdirectory support,
+path selectors, and an interactive TUI for ad-hoc installs.
 
 ## Supported Agents
 
 | Agent      | Skills Directory            | Link Type  |
 |------------|-----------------------------|------------|
 | claude     | `~/.claude/skills/`         | symlink    |
-| standard   | `~/.agents/skills/`         | hardlink   |
+| standard   | `~/.agents/skills/`         | symlink    |
 | codex      | `~/.codex/skills/`          | symlink    |
-| openclaw   | `~/.openclaw/skills/`       | hardlink   |
+| openclaw   | `~/.openclaw/skills/`       | symlink    |
 | pi         | `~/.pi/agent/skills/`       | symlink    |
 
 ## Configuration
@@ -29,6 +29,9 @@ preserved for compatibility. skimi adds Go performance, subdirectory installatio
 **Config file**: `~/.config/skimi/skills.yaml`
 **Lock file**: `~/.config/skimi/skills-lock.yaml`
 **Skill store**: `~/.local/share/skimi/skills/`
+
+See the [complete configuration reference](docs/configuration.md) for every
+field, default, constraint, selector form, collision rule, and migration detail.
 
 ### Example `skills.yaml`
 
@@ -40,7 +43,6 @@ agents:
 
 packages:
   - repo: github.com/example/ai-skills
-    target_dir: example          # installs into <agent_skills_dir>/example/<skill_name>
     agents:
       includes:
         - claude
@@ -48,10 +50,9 @@ packages:
   - repo: github.com/myorg/shared-skills
     skills:
       - coding-assistant
-      - code-review
+      - path: review/code-review
 
   - local_path: ~/my-local-skills
-    target_dir: local
 ```
 
 ## Installation

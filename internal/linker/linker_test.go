@@ -8,28 +8,6 @@ import (
 	"github.com/timonwong/skimi/internal/types"
 )
 
-func TestUseHardlink(t *testing.T) {
-	tests := []struct {
-		agent string
-		want  bool
-	}{
-		{types.AgentStandard, true},
-		{types.AgentOpenClaw, true},
-		{types.AgentClaude, false},
-		{types.AgentCodex, false},
-		{types.AgentPi, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.agent, func(t *testing.T) {
-			got := useHardlink(tt.agent)
-			if got != tt.want {
-				t.Errorf("useHardlink(%q) = %v, want %v", tt.agent, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestSkillLinkPath(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -39,7 +17,6 @@ func TestSkillLinkPath(t *testing.T) {
 	tests := []struct {
 		name      string
 		agent     string
-		targetDir string
 		skillName string
 		wantErr   bool
 		want      string
@@ -70,11 +47,6 @@ func TestSkillLinkPath(t *testing.T) {
 			want: filepath.Join(home, ".pi", "agent", "skills", "my-skill"),
 		},
 		{
-			name:  "claude with targetDir",
-			agent: types.AgentClaude, targetDir: "sub", skillName: "my-skill",
-			want: filepath.Join(home, ".claude", "skills", "sub", "my-skill"),
-		},
-		{
 			name:    "unknown agent returns error",
 			agent:   "unknown-agent",
 			wantErr: true,
@@ -83,7 +55,7 @@ func TestSkillLinkPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := SkillLinkPath(tt.agent, tt.targetDir, tt.skillName)
+			got, err := SkillLinkPath(tt.agent, tt.skillName)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("SkillLinkPath() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -105,7 +77,7 @@ func TestCreateAndRemoveLink_Symlink(t *testing.T) {
 	}
 	dstPath := filepath.Join(dir, "link")
 
-	if err := CreateLink(srcDir, dstPath, types.AgentClaude); err != nil {
+	if err := CreateLink(srcDir, dstPath); err != nil {
 		t.Fatalf("CreateLink: %v", err)
 	}
 
@@ -125,83 +97,22 @@ func TestCreateAndRemoveLink_Symlink(t *testing.T) {
 	}
 }
 
-func TestCreateLink_Hardlink(t *testing.T) {
+func TestCreateLink_StandardUsesSymlink(t *testing.T) {
 	dir := t.TempDir()
 	srcDir := filepath.Join(dir, "src")
 	if err := os.MkdirAll(srcDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	files := map[string]string{
-		"file1.txt": "hello",
-		"file2.txt": "world",
-	}
-	for name, content := range files {
-		if err := os.WriteFile(filepath.Join(srcDir, name), []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
 	dstDir := filepath.Join(dir, "dst")
-	if err := CreateLink(srcDir, dstDir, types.AgentStandard); err != nil {
+	if err := CreateLink(srcDir, dstDir); err != nil {
 		t.Fatalf("CreateLink: %v", err)
 	}
-
-	for name, wantContent := range files {
-		dstFile := filepath.Join(dstDir, name)
-		gotContent, err := os.ReadFile(dstFile)
-		if err != nil {
-			t.Fatalf("read %s: %v", dstFile, err)
-		}
-		if string(gotContent) != wantContent {
-			t.Errorf("file %s: content = %q, want %q", name, gotContent, wantContent)
-		}
-
-		srcFi, err := os.Stat(filepath.Join(srcDir, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		dstFi, err := os.Stat(dstFile)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !os.SameFile(srcFi, dstFi) {
-			t.Errorf("file %s: not a hardlink (inode differs)", name)
-		}
-	}
-}
-
-func TestCopyFile(t *testing.T) {
-	dir := t.TempDir()
-	srcPath := filepath.Join(dir, "src.txt")
-	dstPath := filepath.Join(dir, "dst.txt")
-	content := "test content"
-
-	if err := os.WriteFile(srcPath, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := copyFile(srcPath, dstPath); err != nil {
-		t.Fatalf("copyFile: %v", err)
-	}
-
-	got, err := os.ReadFile(dstPath)
+	fi, err := os.Lstat(dstDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != content {
-		t.Errorf("content = %q, want %q", got, content)
-	}
-
-	srcFi, err := os.Stat(srcPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dstFi, err := os.Stat(dstPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if srcFi.Mode() != dstFi.Mode() {
-		t.Errorf("mode mismatch: src=%v dst=%v", srcFi.Mode(), dstFi.Mode())
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("expected symlink, got %v", fi.Mode())
 	}
 }

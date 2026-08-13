@@ -11,6 +11,14 @@ import (
 	"github.com/timonwong/skimi/internal/types"
 )
 
+func selectors(names ...string) []types.SkillSelector {
+	out := make([]types.SkillSelector, len(names))
+	for i, name := range names {
+		out[i] = types.SkillSelector{Name: name}
+	}
+	return out
+}
+
 func TestRepoStorePath(t *testing.T) {
 	store := "/store"
 	tests := []struct {
@@ -78,47 +86,26 @@ func TestExpandPath(t *testing.T) {
 	}
 }
 
-func TestFilterSkills(t *testing.T) {
+func TestSelectSkills(t *testing.T) {
 	all := []types.DetectedSkill{
-		{Name: "alpha"},
-		{Name: "beta"},
-		{Name: "gamma"},
+		{Name: "alpha", SourcePath: "group/alpha"},
+		{Name: "beta", SourcePath: "beta"},
+		{Name: "alpha", SourcePath: "other/alpha"},
 	}
-
-	tests := []struct {
-		name   string
-		filter []string
-		want   []types.DetectedSkill
-	}{
-		{
-			name:   "subset match",
-			filter: []string{"alpha", "gamma"},
-			want:   []types.DetectedSkill{{Name: "alpha"}, {Name: "gamma"}},
-		},
-		{
-			name:   "single match",
-			filter: []string{"beta"},
-			want:   []types.DetectedSkill{{Name: "beta"}},
-		},
-		{
-			name:   "no match",
-			filter: []string{"delta"},
-			want:   nil,
-		},
-		{
-			name:   "empty filter",
-			filter: []string{},
-			want:   nil,
-		},
+	want := []types.DetectedSkill{
+		{Name: "alpha", SourcePath: "group/alpha"},
+		{Name: "beta", SourcePath: "beta"},
+		{Name: "alpha", SourcePath: "other/alpha"},
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := filterSkills(all, tt.filter)
-			if diff := cmp.Diff(tt.want, got); diff != "" {
-				t.Errorf("filterSkills() mismatch (-want +got):\n%s", diff)
-			}
-		})
+	got, err := selectSkills(all, []types.SkillSelector{{Name: "alpha"}, {Path: "beta"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("selectSkills() mismatch (-want +got):\n%s", diff)
+	}
+	if _, err := selectSkills(all, []types.SkillSelector{{Path: "missing"}}); err == nil {
+		t.Fatal("selectSkills() expected missing selector error")
 	}
 }
 
@@ -252,8 +239,8 @@ func TestUpdateReposUpdatesSelectedRepoAndPreservesUnrelatedEntries(t *testing.T
 	cfg := &types.SkmConfig{
 		Agents: &types.DefaultAgentsConfig{Default: []string{types.AgentClaude}},
 		Packages: []types.SkillPackageConfig{
-			{Repo: repoID, Skills: []string{"alpha", "beta"}, TargetDir: "team"},
-			{Repo: "github.com/example/other", Skills: []string{"other"}},
+			{Repo: repoID, Skills: selectors("alpha", "beta"), TargetDir: "team"},
+			{Repo: "github.com/example/other", Skills: selectors("other")},
 		},
 	}
 
@@ -265,6 +252,10 @@ func TestUpdateReposUpdatesSelectedRepoAndPreservesUnrelatedEntries(t *testing.T
 	}
 
 	got := readLock(t, lockPath)
+	byName := make(map[string]types.InstalledSkill, len(got.Skills))
+	for _, skill := range got.Skills {
+		byName[skill.Name] = skill
+	}
 	wantUnchanged := types.InstalledSkill{
 		Name:      "other",
 		Repo:      "github.com/example/other",
@@ -272,11 +263,11 @@ func TestUpdateReposUpdatesSelectedRepoAndPreservesUnrelatedEntries(t *testing.T
 		SkillPath: "/store/other",
 		LinkedTo:  []string{"/links/other"},
 	}
-	if diff := cmp.Diff(wantUnchanged, got.Skills[0]); diff != "" {
+	if diff := cmp.Diff(wantUnchanged, byName["other"]); diff != "" {
 		t.Errorf("unrelated remote entry mismatch (-want +got):\n%s", diff)
 	}
-	if got.Skills[1].Name != "local" || got.Skills[1].LocalPath != "/tmp/local" {
-		t.Fatalf("local entry changed unexpectedly: %+v", got.Skills[1])
+	if byName["local"].LocalPath != "/tmp/local" {
+		t.Fatalf("local entry changed unexpectedly: %+v", byName["local"])
 	}
 	if len(got.Skills) != 4 {
 		t.Fatalf("lock entries = %d, want 4: %+v", len(got.Skills), got.Skills)
@@ -302,7 +293,7 @@ func TestUpdateReposUpdatesSelectedRepoAndPreservesUnrelatedEntries(t *testing.T
 	}
 }
 
-func TestUpdateReposUpToDateLeavesLockStable(t *testing.T) {
+func TestUpdateReposUpToDateMigratesV1Lock(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", filepath.Join(dir, "home"))
 
@@ -329,7 +320,7 @@ func TestUpdateReposUpToDateLeavesLockStable(t *testing.T) {
 
 	cfg := &types.SkmConfig{
 		Agents:   &types.DefaultAgentsConfig{Default: []string{types.AgentClaude}},
-		Packages: []types.SkillPackageConfig{{Repo: repoID, Skills: []string{"alpha"}}},
+		Packages: []types.SkillPackageConfig{{Repo: repoID, Skills: selectors("alpha")}},
 	}
 
 	if err := UpdateRepos(cfg, []string{repoID}, Options{
@@ -340,30 +331,208 @@ func TestUpdateReposUpToDateLeavesLockStable(t *testing.T) {
 	}
 
 	got := readLock(t, lockPath)
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("lock mismatch (-want +got):\n%s", diff)
+	if got.Version != lock.CurrentVersion || len(got.Skills) != 1 {
+		t.Fatalf("lock = %+v", got)
+	}
+	if got.Skills[0].Commit != commit || got.Skills[0].SourcePath != "alpha" {
+		t.Fatalf("migrated skill = %+v", got.Skills[0])
+	}
+	newLink := filepath.Join(dir, "home", ".claude", "skills", "alpha")
+	if fi, err := os.Lstat(newLink); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("migrated link: %v %v", fi, err)
 	}
 }
 
-func TestReplaceUpdatedRepoEntriesAppendsChangedReposInRequestOrder(t *testing.T) {
-	lf := &types.LockFile{Skills: []types.InstalledSkill{
-		{Name: "old-a", Repo: "repo-a"},
-		{Name: "keep", Repo: "repo-keep"},
-		{Name: "old-b", Repo: "repo-b"},
-	}}
-	changed := map[string][]types.InstalledSkill{
-		"repo-a": {{Name: "new-a", Repo: "repo-a"}},
-		"repo-b": {{Name: "new-b", Repo: "repo-b"}},
+func TestRunFlattensAndUsesDeterministicLastWinner(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+	sourceDir := filepath.Join(dir, "source")
+	writeSkill(t, filepath.Join(sourceDir, "skills", "a", "wait"), "wait")
+	writeSkill(t, filepath.Join(sourceDir, "skills", "z", "wait"), "wait")
+	writeSkill(t, filepath.Join(sourceDir, "skills", "then"), "then")
+
+	lockPath := filepath.Join(dir, "lock.yaml")
+	cfg := &types.SkmConfig{
+		Agents:   &types.DefaultAgentsConfig{Default: []string{types.AgentClaude, types.AgentStandard}},
+		Packages: []types.SkillPackageConfig{{LocalPath: sourceDir}},
+	}
+	if err := Run(cfg, Options{LockPath: lockPath, StoreDir: filepath.Join(dir, "store")}); err != nil {
+		t.Fatal(err)
+	}
+	for _, root := range []string{filepath.Join(home, ".claude", "skills"), filepath.Join(home, ".agents", "skills")} {
+		wait := filepath.Join(root, "wait")
+		fi, err := os.Lstat(wait)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("%s is not a symlink", wait)
+		}
+		target, err := os.Readlink(wait)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if target != filepath.Join(sourceDir, "skills", "z", "wait") {
+			t.Fatalf("wait target = %q", target)
+		}
+	}
+	lf := readLock(t, lockPath)
+	if lf.Version != lock.CurrentVersion || len(lf.Skills) != 2 {
+		t.Fatalf("lock = %+v", lf)
+	}
+}
+
+func TestRunPathSelectorOverridesNameDefault(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", filepath.Join(dir, "home"))
+	sourceDir := filepath.Join(dir, "source")
+	writeSkill(t, filepath.Join(sourceDir, "skills", "a", "wait"), "wait")
+	writeSkill(t, filepath.Join(sourceDir, "skills", "z", "wait"), "wait")
+	cfg := &types.SkmConfig{
+		Agents: &types.DefaultAgentsConfig{Default: []string{types.AgentClaude}},
+		Packages: []types.SkillPackageConfig{{
+			LocalPath: sourceDir,
+			Skills:    []types.SkillSelector{{Path: "a/wait"}},
+		}},
+	}
+	if err := Run(cfg, Options{LockPath: filepath.Join(dir, "lock.yaml")}); err != nil {
+		t.Fatal(err)
+	}
+	target, err := os.Readlink(filepath.Join(dir, "home", ".claude", "skills", "wait"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != filepath.Join(sourceDir, "skills", "a", "wait") {
+		t.Fatalf("target = %q", target)
+	}
+}
+
+func TestRunLaterPackageWins(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", filepath.Join(dir, "home"))
+	first := filepath.Join(dir, "first")
+	second := filepath.Join(dir, "second")
+	writeSkill(t, filepath.Join(first, "wait"), "wait")
+	writeSkill(t, filepath.Join(second, "wait"), "wait")
+	cfg := &types.SkmConfig{
+		Agents:   &types.DefaultAgentsConfig{Default: []string{types.AgentClaude}},
+		Packages: []types.SkillPackageConfig{{LocalPath: first}, {LocalPath: second}},
+	}
+	if err := Run(cfg, Options{LockPath: filepath.Join(dir, "lock.yaml")}); err != nil {
+		t.Fatal(err)
+	}
+	target, err := os.Readlink(filepath.Join(dir, "home", ".claude", "skills", "wait"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != filepath.Join(second, "wait") {
+		t.Fatalf("target = %q", target)
+	}
+}
+
+func TestRunMigratesV1NestedLinkAndRejectsUnownedDestination(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+	sourceDir := filepath.Join(dir, "source")
+	skillDir := filepath.Join(sourceDir, "wait")
+	writeSkill(t, skillDir, "wait")
+	oldLink := filepath.Join(home, ".claude", "skills", "legacy", "wait")
+	if err := os.MkdirAll(filepath.Dir(oldLink), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(skillDir, oldLink); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(dir, "lock.yaml")
+	writeLock(t, lockPath, &types.LockFile{Skills: []types.InstalledSkill{{
+		Name: "wait", LocalPath: sourceDir, SkillPath: skillDir, TargetDir: "legacy", LinkedTo: []string{oldLink},
+	}}})
+	cfg := &types.SkmConfig{Agents: &types.DefaultAgentsConfig{Default: []string{types.AgentClaude}}, Packages: []types.SkillPackageConfig{{LocalPath: sourceDir}}}
+	if err := Run(cfg, Options{LockPath: lockPath}); err != nil {
+		t.Fatal(err)
+	}
+	newLink := filepath.Join(home, ".claude", "skills", "wait")
+	if fi, err := os.Lstat(newLink); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("new link: %v %v", fi, err)
+	}
+	if _, err := os.Lstat(oldLink); !os.IsNotExist(err) {
+		t.Fatalf("old link remains: %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(oldLink)); !os.IsNotExist(err) {
+		t.Fatalf("empty legacy dir remains: %v", err)
 	}
 
-	got := replaceUpdatedRepoEntries(lf, []string{"repo-b", "repo-a"}, changed)
-	var names []string
-	for _, skill := range got.Skills {
-		names = append(names, skill.Name)
+	unowned := filepath.Join(home, ".claude", "skills", "wait")
+	if err := os.Remove(unowned); err != nil {
+		t.Fatal(err)
 	}
-	want := []string{"keep", "new-b", "new-a"}
-	if diff := cmp.Diff(want, names); diff != "" {
-		t.Errorf("skill order mismatch (-want +got):\n%s", diff)
+	if err := os.WriteFile(unowned, []byte("user data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeLock(t, lockPath, &types.LockFile{})
+	if err := Run(cfg, Options{LockPath: lockPath}); err == nil {
+		t.Fatal("expected unowned destination conflict")
+	}
+	data, err := os.ReadFile(unowned)
+	if err != nil || string(data) != "user data" {
+		t.Fatalf("unowned destination changed: %q %v", data, err)
+	}
+}
+
+func TestRunRollsBackLinksWhenLockWriteFails(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+	sourceDir := filepath.Join(dir, "source")
+	skillDir := filepath.Join(sourceDir, "wait")
+	writeSkill(t, skillDir, "wait")
+	destination := filepath.Join(home, ".claude", "skills", "wait")
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldSource := filepath.Join(dir, "old-wait")
+	writeSkill(t, oldSource, "wait")
+	if err := os.Symlink(oldSource, destination); err != nil {
+		t.Fatal(err)
+	}
+	lockDir := filepath.Join(dir, "readonly-lock-dir")
+	if err := os.MkdirAll(lockDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(lockDir, "lock.yaml")
+	old := &types.LockFile{Skills: []types.InstalledSkill{{Name: "wait", LocalPath: sourceDir, SkillPath: oldSource, LinkedTo: []string{destination}}}}
+	writeLock(t, lockPath, old)
+	if err := os.Chmod(lockDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chmod(lockDir, 0o755); err != nil {
+			t.Errorf("restore lock directory permissions: %v", err)
+		}
+	})
+	cfg := &types.SkmConfig{Agents: &types.DefaultAgentsConfig{Default: []string{types.AgentClaude}}, Packages: []types.SkillPackageConfig{{LocalPath: sourceDir}}}
+	if err := Run(cfg, Options{LockPath: lockPath}); err == nil {
+		t.Fatal("expected lock write failure")
+	}
+	target, err := os.Readlink(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != oldSource {
+		t.Fatalf("rollback target = %q, want %q", target, oldSource)
+	}
+}
+
+func writeSkill(t *testing.T, dir, name string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("---\nname: " + name + "\ndescription: test\n---\n")
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), body, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

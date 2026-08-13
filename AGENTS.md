@@ -19,7 +19,7 @@ internal/config/config.go      skills.yaml read/write + DefaultPaths
 internal/lock/lock.go          skills-lock.yaml atomic read/write + FindByName
 internal/git/git.go            git CLI wrapper (Clone/Pull/Fetch/HeadCommit/RevParse/Log)
 internal/detect/detect.go      SKILL.md scanner + frontmatter parser
-internal/linker/linker.go      symlink/hardlink management, agent directory mapping
+internal/linker/linker.go      symlink management and agent directory mapping
 internal/installer/installer.go Core install orchestration: Run, RepoStorePath, ExpandPath
 internal/cli/                  Cobra commands: root install list view check-updates update remove
 ```
@@ -44,8 +44,8 @@ No circular dependencies. `types` is the pure leaf; all packages flow up to `cli
 | `AgentClaude` | `~/.claude/skills/` | symlink |
 | `AgentCodex` | `~/.codex/skills/` | symlink |
 | `AgentPi` | `~/.pi/agent/skills/` | symlink |
-| `AgentStandard` | `~/.agents/skills/` | hardlink |
-| `AgentOpenClaw` | `~/.openclaw/skills/` | hardlink |
+| `AgentStandard` | `~/.agents/skills/` | symlink |
+| `AgentOpenClaw` | `~/.openclaw/skills/` | symlink |
 
 ## Code Conventions
 
@@ -57,9 +57,10 @@ No circular dependencies. `types` is the pure leaf; all packages flow up to `cli
 
 ## Key Design Decisions
 
-- `target_dir` is a package-level field; skills install into `<agentDir>/skills/<targetDir>/<skill>`
+- Skills install flat into `<agentDir>/skills/<skill>` for every agent
+- `target_dir` is deprecated, ignored, and retained only for v1 config compatibility
+- Duplicate names use deterministic last-wins resolution; `path` selectors disambiguate
 - SKILL.md scan: stops descending once SKILL.md is found in a directory (same as skm behaviour)
-- `standard` and `openclaw` agents use hardlinks; all others use symlinks
+- Every agent uses directory symlinks
 - Lock file written atomically; never partially updated
 - `installer.RepoStorePath` and `installer.ExpandPath` are exported for reuse by the CLI layer
-
