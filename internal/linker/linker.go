@@ -41,7 +41,9 @@ func SkillLinkPath(agentName, skillName string) (string, error) {
 }
 
 // CreateLink installs a skill from srcPath at dstPath.
-// It always creates a directory symlink.
+// It creates a directory symlink, falling back to a directory junction on
+// Windows when the account lacks the privilege symlinks require; see
+// createLinkFallback in linker_windows.go.
 func CreateLink(srcPath, dstPath string) error {
 	if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
 		return fmt.Errorf("create parent dir for %s: %w", dstPath, err)
@@ -52,18 +54,25 @@ func CreateLink(srcPath, dstPath string) error {
 		return err
 	}
 
-	return os.Symlink(srcPath, dstPath)
+	err := os.Symlink(srcPath, dstPath)
+	if err == nil {
+		return nil
+	}
+	return createLinkFallback(srcPath, dstPath, err)
 }
 
 // RemoveLink removes the link at dstPath.
-// Symlinks are removed directly; legacy hardlink trees are removed recursively.
+// Symlinks and Windows junctions are removed directly; legacy hardlink trees
+// are removed recursively.
 func RemoveLink(dstPath string) error {
 	return removeExisting(dstPath)
 }
 
 // IsManagedLink reports whether dstPath is a link skimi installed for the
-// skill at srcPath: either a symlink resolving to srcPath, or a legacy
-// hardlink tree whose SKILL.md still shares an inode with srcPath's SKILL.md.
+// skill at srcPath: either a symlink resolving to srcPath, or a directory
+// whose SKILL.md still shares an inode with srcPath's SKILL.md. The second
+// case covers legacy hardlink trees and Windows junctions alike, since reading
+// SKILL.md through a junction reaches the very same file.
 // Anything else (user files, replaced directories, symlinks pointing
 // elsewhere) is not skimi's to delete.
 func IsManagedLink(dstPath, srcPath string) bool {
@@ -81,7 +90,9 @@ func IsManagedLink(dstPath, srcPath string) bool {
 		}
 		return filepath.Clean(target) == filepath.Clean(srcPath)
 	}
-	if !fi.IsDir() {
+	// A junction is neither ModeDir nor ModeSymlink to Lstat, so it needs
+	// isReparsePoint to reach the SKILL.md check below.
+	if !fi.IsDir() && !isReparsePoint(fi) {
 		return false
 	}
 	dstMD, err := os.Stat(filepath.Join(dstPath, "SKILL.md"))
@@ -96,6 +107,9 @@ func IsManagedLink(dstPath, srcPath string) bool {
 }
 
 // removeExisting removes dstPath whether it is a symlink, file, or directory.
+// A Windows junction lands in the os.Remove branch (Lstat reports it as
+// irregular rather than a directory), where RemoveDirectory unlinks the
+// junction itself and leaves the skill store it points at alone.
 func removeExisting(path string) error {
 	fi, err := os.Lstat(path)
 	if os.IsNotExist(err) {

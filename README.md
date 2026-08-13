@@ -6,7 +6,9 @@ A Go implementation of a skill manager for AI agents — inspired by [reorx/skm]
 
 `skimi` manages AI agent skills across multiple agent platforms. It reads a declarative
 configuration file (`skills.yaml`) and installs skills from git repositories or local paths
-into agent-specific skill directories using flat symlinks.
+into agent-specific skill directories using flat symlinks. On Windows, where creating a
+symlink requires Developer Mode or an elevated shell, skimi falls back to a directory
+junction, which needs no such privilege.
 
 **Credit**: This project is based on the design and configuration format of
 [skm](https://github.com/reorx/skm) by [reorx](https://github.com/reorx).

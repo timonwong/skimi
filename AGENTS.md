@@ -23,6 +23,8 @@ internal/lock/lock.go          skills-lock.yaml atomic read/write + FindByName
 internal/git/git.go            git CLI wrapper (Clone/Pull/Fetch/HeadCommit/RevParse/Log)
 internal/detect/detect.go      SKILL.md scanner + frontmatter parser
 internal/linker/linker.go      symlink management, agent directory mapping, IsManagedLink
+internal/linker/junction.go    Mount point reparse data encoder (pure, testable on any OS)
+internal/linker/linker_windows.go / linker_other.go  Windows junction fallback and its no-op stub
 internal/installer/installer.go Install/update orchestration + the applyPlan transaction
 internal/cli/                  Cobra commands: root install list view edit check-updates update remove
 ```
@@ -58,7 +60,7 @@ internal/cli/                  Cobra commands: root install list view edit check
 
 ## Key Design Decisions
 
-- Skills install flat, as directory symlinks, into `<agentDir>/skills/<skill>` for every agent
+- Skills install flat, as directory symlinks, into `<agentDir>/skills/<skill>` for every agent; on Windows, a symlink refused with ERROR_PRIVILEGE_NOT_HELD falls back to a directory junction
 - Config-driven `install` is a full sync (config is the desired state); interactive `install <source>` is additive via `Options.Additive`, preserving unrelated lock entries
 - Deletion requires proof of ownership: paths failing `linker.IsManagedLink` (see its doc comment) are never deleted, only warned about
 - `applyPlan` is transactional: existing paths are renamed to backups, restored on any failure, and deleted only after the lock file saves

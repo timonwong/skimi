@@ -52,7 +52,10 @@ Supported agent names and destinations:
 | `pi` | `~/.pi/agent/skills/` |
 
 All agents use directory symlinks. Every skill is installed flat as
-`<destination>/<skill-name>`.
+`<destination>/<skill-name>`. On Windows, an account without Developer Mode or
+an elevated shell cannot create symlinks, so skimi installs a directory
+junction instead; it resolves to the same skill directory and is managed the
+same way.
 
 ## Package fields
 
