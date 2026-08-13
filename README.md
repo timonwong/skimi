@@ -16,13 +16,13 @@ path selectors, and an interactive TUI for ad-hoc installs.
 
 ## Supported Agents
 
-| Agent      | Skills Directory            | Link Type  |
-|------------|-----------------------------|------------|
-| claude     | `~/.claude/skills/`         | symlink    |
-| standard   | `~/.agents/skills/`         | symlink    |
-| codex      | `~/.codex/skills/`          | symlink    |
-| openclaw   | `~/.openclaw/skills/`       | symlink    |
-| pi         | `~/.pi/agent/skills/`       | symlink    |
+| Agent      | Skills Directory            |
+|------------|-----------------------------|
+| claude     | `~/.claude/skills/`         |
+| standard   | `~/.agents/skills/`         |
+| codex      | `~/.codex/skills/`          |
+| openclaw   | `~/.openclaw/skills/`       |
+| pi         | `~/.pi/agent/skills/`       |
 
 ## Configuration
 
@@ -95,10 +95,10 @@ release version.
 ## Usage
 
 ```bash
-# Install all skills from skills.yaml
+# Install all skills from skills.yaml (full sync: removes skills not declared there)
 skimi install
 
-# Interactively install from a source
+# Interactively install from a source (additive: other installed skills stay)
 skimi install github.com/example/ai-skills
 
 # List installed skills

@@ -97,6 +97,65 @@ func TestCreateAndRemoveLink_Symlink(t *testing.T) {
 	}
 }
 
+func TestIsManagedLink(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "src", "skill")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "SKILL.md"), []byte("skill"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	symlink := filepath.Join(dir, "symlink")
+	if err := os.Symlink(srcDir, symlink); err != nil {
+		t.Fatal(err)
+	}
+	otherLink := filepath.Join(dir, "other-link")
+	if err := os.Symlink(filepath.Join(dir, "src"), otherLink); err != nil {
+		t.Fatal(err)
+	}
+	hardlinkTree := filepath.Join(dir, "hardlink-tree")
+	if err := os.MkdirAll(hardlinkTree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(filepath.Join(srcDir, "SKILL.md"), filepath.Join(hardlinkTree, "SKILL.md")); err != nil {
+		t.Fatal(err)
+	}
+	copiedTree := filepath.Join(dir, "copied-tree")
+	if err := os.MkdirAll(copiedTree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(copiedTree, "SKILL.md"), []byte("skill"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plainFile := filepath.Join(dir, "plain-file")
+	if err := os.WriteFile(plainFile, []byte("user data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		dst  string
+		want bool
+	}{
+		{"symlink to source", symlink, true},
+		{"symlink elsewhere", otherLink, false},
+		{"legacy hardlink tree", hardlinkTree, true},
+		{"copied tree same content", copiedTree, false},
+		{"plain file", plainFile, false},
+		{"missing path", filepath.Join(dir, "missing"), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsManagedLink(tt.dst, srcDir); got != tt.want {
+				t.Errorf("IsManagedLink(%q, %q) = %v, want %v", tt.dst, srcDir, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCreateLink_StandardUsesSymlink(t *testing.T) {
 	dir := t.TempDir()
 	srcDir := filepath.Join(dir, "src")
