@@ -9,10 +9,20 @@ import (
 	"strings"
 )
 
-// Clone clones repo into destPath.
+// Clone clones repo into destPath as a blobless, single-branch clone.
+//
+// --filter=blob:none only defers blob downloads; the checkout still
+// materialises every file of HEAD, which is what skills are read and symlinked
+// from, and git fetches any blob a later command asks for on demand. The full
+// commit graph still arrives, so `git log --oneline old..new` can render a
+// changelog of any length. That is why there is no --depth: an update interval
+// can span more commits than a fixed depth would keep.
+//
+// Cloning from a plain local path makes git warn that it ignores the filter,
+// which is harmless and leaves an ordinary full clone behind.
 func Clone(repo, destPath string) error {
 	url := repoURL(repo)
-	out, err := run("git", "clone", url, destPath)
+	out, err := run("git", "clone", "--filter=blob:none", "--single-branch", url, destPath)
 	if err != nil {
 		return fmt.Errorf("git clone %s: %w\n%s", repo, err, out)
 	}
