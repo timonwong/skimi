@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/timonwong/skimi/internal/config"
 	"github.com/timonwong/skimi/internal/detect"
 	"github.com/timonwong/skimi/internal/git"
@@ -31,6 +33,11 @@ type Options struct {
 	SkipSync bool
 }
 
+// syncLimit caps how many repos are cloned, pulled or fetched at once. Repo
+// sync is network-bound, so a small fixed fan-out hides most of the latency
+// without opening a connection per declared package.
+const syncLimit = 4
+
 // Run installs all packages declared in cfg and updates the lock file.
 func Run(cfg *types.SkmConfig, opts Options) error {
 	if err := config.Validate(cfg); err != nil {
@@ -41,13 +48,19 @@ func Run(cfg *types.SkmConfig, opts Options) error {
 		return fmt.Errorf("load lock file: %w", err)
 	}
 
+	if !opts.SkipSync {
+		if err := syncConfigRepos(cfg, opts); err != nil {
+			return err
+		}
+	}
+
 	defaultAgents := resolveDefaultAgents(cfg)
 	var candidates []installCandidate
 	for i, pkg := range cfg.Packages {
 		if i > 0 {
 			fmt.Println()
 		}
-		prepared, err := preparePackage(pkg, defaultAgents, opts, !opts.SkipSync)
+		prepared, err := preparePackage(pkg, defaultAgents, opts)
 		if err != nil {
 			return err
 		}
@@ -58,6 +71,126 @@ func Run(cfg *types.SkmConfig, opts Options) error {
 		winners = append(preservedCandidates(lf, winners), winners...)
 	}
 	return applyPlan(lf, winners, opts)
+}
+
+// repoSync is one repo's sync job: what to sync, and what the sync produced.
+// Each concurrent worker owns exactly one element of the slice, so the results
+// can be reported afterwards in the order the config or the command line
+// listed the repos, no matter which sync finished first.
+type repoSync struct {
+	repo      string
+	cloneURL  string
+	dest      string
+	oldCommit string
+	newCommit string
+	// skipped marks a dry run that found no store copy to preview.
+	skipped bool
+	err     error
+}
+
+// configRepos returns the remote repos cfg declares, deduplicated by repo
+// identifier and kept in first-seen order. Several packages may name the same
+// repo (typically with different subdirs); they share one store clone, so the
+// first spelling's clone URL syncs it once for all of them.
+func configRepos(cfg *types.SkmConfig, storeDir string) ([]repoSync, error) {
+	seen := make(map[string]struct{}, len(cfg.Packages))
+	var out []repoSync
+	for _, pkg := range cfg.Packages {
+		if pkg.Repo == "" {
+			continue
+		}
+		parsed, err := source.Parse(pkg.Repo)
+		if err != nil {
+			return nil, fmt.Errorf("parse repo %q: %w", pkg.Repo, err)
+		}
+		if parsed.Kind != source.SourceRemote {
+			continue
+		}
+		if _, ok := seen[parsed.Repo]; ok {
+			continue
+		}
+		seen[parsed.Repo] = struct{}{}
+		out = append(out, repoSync{
+			repo:     parsed.Repo,
+			cloneURL: parsed.GetCloneURL(),
+			dest:     RepoStorePath(storeDir, parsed.Repo),
+		})
+	}
+	return out, nil
+}
+
+// syncConfigRepos brings every remote repo cfg declares up to date before any
+// package is prepared. Doing it here rather than inside preparePackage syncs
+// each repo once even when several packages share it, and lets the repos sync
+// concurrently.
+func syncConfigRepos(cfg *types.SkmConfig, opts Options) error {
+	repos, err := configRepos(cfg, opts.StoreDir)
+	if err != nil {
+		return err
+	}
+	if len(repos) == 0 {
+		return nil
+	}
+
+	var g errgroup.Group
+	g.SetLimit(syncLimit)
+	for i := range repos {
+		job := &repos[i]
+		g.Go(func() error {
+			// A dry run must never pull the store: installed skills are
+			// symlinks into its working tree, so a pull here would change what
+			// agents load before the lock records anything. Fetch instead,
+			// which only writes .git-internal refs such as FETCH_HEAD.
+			if opts.DryRun {
+				if _, statErr := os.Stat(job.dest); os.IsNotExist(statErr) {
+					// Nothing local to preview; preparePackage reports the
+					// clone when it processes this repo's packages.
+					job.skipped = true
+					return nil
+				}
+				job.err = git.Fetch(job.dest)
+				return nil
+			}
+			job.err = EnsureRepo(opts.StoreDir, job.cloneURL, job.dest)
+			// Every worker records its own outcome and reports success, so the
+			// group never cancels a sibling mid-clone and the errors are
+			// consumed below in config order rather than in finish order.
+			return nil
+		})
+	}
+	_ = g.Wait()
+
+	for i := range repos {
+		job := &repos[i]
+		if !opts.DryRun {
+			// EnsureRepo already names the store path in errors it cannot
+			// recover from; the first failure in config order aborts the
+			// install, and a success stays quiet because preparePackage still
+			// prints "Using existing <repo>" for every package.
+			if job.err != nil {
+				return job.err
+			}
+			continue
+		}
+		if job.skipped {
+			continue
+		}
+		// A dry run never aborts because a preview step failed.
+		if job.err != nil {
+			fmt.Fprintf(os.Stderr, "warning: fetch %s: %v\n", job.repo, job.err)
+			continue
+		}
+		// The report happens before the package loop, so it has to name the
+		// repo itself instead of leaning on preparePackage's "Using existing".
+		fmt.Println(ui.Blue.Render("Fetching " + job.repo + " ..."))
+		oldCommit, headErr := git.HeadCommit(job.dest)
+		if headErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: read HEAD for %s: %v\n", job.repo, headErr)
+			continue
+		}
+		reportFetched(job.dest, job.repo, oldCommit)
+	}
+	return nil
 }
 
 // preservedCandidates returns lock entries whose names are not taken by any
@@ -89,62 +222,8 @@ func UpdateRepos(cfg *types.SkmConfig, repos []string, opts Options) error {
 		return fmt.Errorf("load lock file: %w", err)
 	}
 
-	for i, repo := range repos {
-		if i > 0 {
-			fmt.Println()
-		}
-
-		pkgs, err := packagesForRepo(cfg, repo)
-		if err != nil {
-			return err
-		}
-		oldCommit := lockedRepoCommit(lf, repo)
-
-		dest := RepoStorePath(opts.StoreDir, repo)
-
-		// A dry run must never pull the store: installed skills are symlinks
-		// into its working tree, so a pull here would change what agents load
-		// before the lock records anything. Fetch instead, which only writes
-		// .git-internal refs such as FETCH_HEAD, and report what a real pull
-		// would do.
-		if opts.DryRun {
-			if _, statErr := os.Stat(dest); os.IsNotExist(statErr) {
-				// Nothing local to report yet; preparePackage reports the
-				// clone when it processes this repo's packages below.
-				continue
-			}
-			fmt.Println(ui.Blue.Render("Fetching " + repo + " ..."))
-			DryRunFetch(dest, repo, oldCommit)
-			continue
-		}
-
-		fmt.Println(ui.Blue.Render("Pulling " + repo + " ..."))
-		if err := EnsureRepo(opts.StoreDir, pkgs[0].cloneURL, dest); err != nil {
-			return err
-		}
-		newCommit, err := git.HeadCommit(dest)
-		if err != nil {
-			return err
-		}
-
-		if oldCommit == newCommit {
-			commit := shortCommit(newCommit)
-			if commit == "" {
-				commit = "unknown"
-			}
-			fmt.Println(ui.Green.Render("  Already up to date (" + commit + ")"))
-			continue
-		}
-
-		fmt.Printf("  Updated %s -> %s\n", ui.Red.Render(shortCommit(oldCommit)), ui.Green.Render(shortCommit(newCommit)))
-		if oldCommit != "" {
-			log, err := git.Log(dest, oldCommit, newCommit)
-			if err == nil && log != "" {
-				for _, line := range strings.Split(log, "\n") {
-					fmt.Println(ui.Dim.Render("    " + line))
-				}
-			}
-		}
+	if err := syncSelectedRepos(cfg, lf, repos, opts); err != nil {
+		return err
 	}
 	defaultAgents := resolveDefaultAgents(cfg)
 	var candidates []installCandidate
@@ -183,7 +262,7 @@ func UpdateRepos(cfg *types.SkmConfig, repos []string, opts Options) error {
 			repoID = parsed.Repo
 		}
 		if _, isChanged := changedRepos[repoID]; isChanged {
-			prepared, err := preparePackage(pkg, defaultAgents, opts, false)
+			prepared, err := preparePackage(pkg, defaultAgents, opts)
 			if err != nil {
 				return err
 			}
@@ -197,6 +276,103 @@ func UpdateRepos(cfg *types.SkmConfig, repos []string, opts Options) error {
 		}
 	}
 	return applyPlan(lf, resolveCollisions(candidates), opts)
+}
+
+// syncSelectedRepos syncs the repos an update names and reports what moved.
+// Validation and the lock lookup run first, so a repo that is not declared in
+// the config aborts before anything touches the network; the syncs then run
+// concurrently, and every report is printed afterwards in the order repos
+// lists them.
+func syncSelectedRepos(cfg *types.SkmConfig, lf *types.LockFile, repos []string, opts Options) error {
+	jobs := make([]repoSync, len(repos))
+	for i, repo := range repos {
+		pkgs, err := packagesForRepo(cfg, repo)
+		if err != nil {
+			return err
+		}
+		jobs[i] = repoSync{
+			repo:      repo,
+			cloneURL:  pkgs[0].cloneURL,
+			dest:      RepoStorePath(opts.StoreDir, repo),
+			oldCommit: lockedRepoCommit(lf, repo),
+		}
+	}
+
+	var g errgroup.Group
+	g.SetLimit(syncLimit)
+	for i := range jobs {
+		job := &jobs[i]
+		g.Go(func() error {
+			// A dry run must never pull the store: installed skills are
+			// symlinks into its working tree, so a pull here would change what
+			// agents load before the lock records anything. Fetch instead,
+			// which only writes .git-internal refs such as FETCH_HEAD, and
+			// report what a real pull would do.
+			if opts.DryRun {
+				if _, statErr := os.Stat(job.dest); os.IsNotExist(statErr) {
+					job.skipped = true
+					return nil
+				}
+				job.err = git.Fetch(job.dest)
+				return nil
+			}
+			if job.err = EnsureRepo(opts.StoreDir, job.cloneURL, job.dest); job.err != nil {
+				return nil
+			}
+			job.newCommit, job.err = git.HeadCommit(job.dest)
+			// Each worker records its own outcome and reports success, so a
+			// failing repo never cancels a sibling mid-clone and the errors
+			// surface below in the order the user listed the repos.
+			return nil
+		})
+	}
+	_ = g.Wait()
+
+	for i := range jobs {
+		job := &jobs[i]
+		if i > 0 {
+			fmt.Println()
+		}
+		if job.skipped {
+			// Nothing local to report yet; preparePackage reports the clone
+			// when it processes this repo's packages.
+			continue
+		}
+
+		if opts.DryRun {
+			fmt.Println(ui.Blue.Render("Fetching " + job.repo + " ..."))
+			if job.err != nil {
+				fmt.Fprintf(os.Stderr, "warning: fetch %s: %v\n", job.repo, job.err)
+				continue
+			}
+			reportFetched(job.dest, job.repo, job.oldCommit)
+			continue
+		}
+
+		fmt.Println(ui.Blue.Render("Pulling " + job.repo + " ..."))
+		if job.err != nil {
+			return job.err
+		}
+		if job.oldCommit == job.newCommit {
+			commit := shortCommit(job.newCommit)
+			if commit == "" {
+				commit = "unknown"
+			}
+			fmt.Println(ui.Green.Render("  Already up to date (" + commit + ")"))
+			continue
+		}
+
+		fmt.Printf("  Updated %s -> %s\n", ui.Red.Render(shortCommit(job.oldCommit)), ui.Green.Render(shortCommit(job.newCommit)))
+		if job.oldCommit != "" {
+			log, err := git.Log(job.dest, job.oldCommit, job.newCommit)
+			if err == nil && log != "" {
+				for _, line := range strings.Split(log, "\n") {
+					fmt.Println(ui.Dim.Render("    " + line))
+				}
+			}
+		}
+	}
+	return nil
 }
 
 type repoPackage struct {
@@ -255,10 +431,10 @@ type installCandidate struct {
 var validSkillName = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 
 // preparePackage resolves and validates a package without changing agent skill
-// directories or the lock file. syncRemote clones or pulls a remote package
-// before reading it, and a failed pull aborts the install; callers that already
-// synced the repo pass false so the same repo is not fetched twice.
-func preparePackage(pkg types.SkillPackageConfig, defaultAgents []string, opts Options, syncRemote bool) ([]installCandidate, error) {
+// directories or the lock file. It performs no network access: the caller
+// syncs the store first (see syncConfigRepos and syncSelectedRepos), which
+// syncs a repo once even when several packages share it.
+func preparePackage(pkg types.SkillPackageConfig, defaultAgents []string, opts Options) ([]installCandidate, error) {
 	var sourceDir string
 	var repo, localPath, sourceIdentity string
 
@@ -281,10 +457,9 @@ func preparePackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 
 		// A dry run must never clone the store, and there is nothing local to
 		// detect skills from yet, so report the clone and skip this package
-		// instead of failing the dry run. This applies regardless of
-		// syncRemote: a caller that believes the repo is already synced (for
-		// example UpdateRepos, after its own dry-run fetch) must still not
-		// crash if the store was never actually cloned.
+		// instead of failing the dry run. The caller's sync stage skips a
+		// missing store copy for the same reason, so this is the only place
+		// that reports it.
 		if opts.DryRun && destMissing {
 			fmt.Println(ui.Blue.Render("Would clone " + repo))
 			return nil, nil
@@ -294,23 +469,6 @@ func preparePackage(pkg types.SkillPackageConfig, defaultAgents []string, opts O
 			fmt.Println(ui.Blue.Render("Using " + repo))
 		} else {
 			fmt.Println(ui.Blue.Render("Using existing " + repo))
-		}
-
-		if syncRemote {
-			if opts.DryRun {
-				// Never pull the store on a dry run: fetch is read-only (it
-				// only writes .git-internal refs such as FETCH_HEAD) and
-				// leaves the working tree, which live skill symlinks point
-				// into, untouched.
-				oldCommit, headErr := git.HeadCommit(dest)
-				if headErr != nil {
-					fmt.Fprintf(os.Stderr, "warning: read HEAD for %s: %v\n", repo, headErr)
-				} else {
-					DryRunFetch(dest, repo, oldCommit)
-				}
-			} else if err := EnsureRepo(opts.StoreDir, parsed.GetCloneURL(), dest); err != nil {
-				return nil, err
-			}
 		}
 
 		// Apply subdir if specified in the source
@@ -704,7 +862,16 @@ func DryRunFetch(dest, repo, oldCommit string) {
 		fmt.Fprintf(os.Stderr, "warning: fetch %s: %v\n", repo, err)
 		return
 	}
+	reportFetched(dest, repo, oldCommit)
+}
 
+// reportFetched prints what a pull would do to dest, reading the remote state
+// a preceding fetch left in FETCH_HEAD. It is the reporting half of
+// DryRunFetch, split out so a caller that fetches many repos at once keeps the
+// network step in its worker and prints in a deterministic order afterwards.
+// Everything it runs is local, and every failure is a warning: a dry run must
+// never abort because a preview step failed.
+func reportFetched(dest, repo, oldCommit string) {
 	// After git fetch, FETCH_HEAD contains the fetched commit.
 	newCommit, err := git.RevParse(dest, "FETCH_HEAD")
 	if err != nil {

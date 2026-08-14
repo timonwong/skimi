@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
+
 	"github.com/timonwong/skimi/internal/config"
 	"github.com/timonwong/skimi/internal/git"
 	"github.com/timonwong/skimi/internal/installer"
@@ -13,6 +15,11 @@ import (
 	"github.com/timonwong/skimi/internal/source"
 	"github.com/timonwong/skimi/internal/types"
 )
+
+// fetchLimit caps how many repos check-updates fetches at once. It matches the
+// installer's sync fan-out: enough to hide most of the network latency of a
+// multi-repo config without opening a connection per repo.
+const fetchLimit = 4
 
 func newCheckUpdatesCmd() *cobra.Command {
 	return &cobra.Command{
@@ -42,17 +49,46 @@ func newCheckUpdatesCmd() *cobra.Command {
 				return err
 			}
 
+			// Fetch every cloned repo at once, then report in config order:
+			// the network step is what makes this command slow, while the
+			// comparison below is local and stays serial so the output does
+			// not depend on which fetch finished first.
+			type fetchResult struct {
+				dest      string
+				notCloned bool
+				err       error
+			}
+			results := make([]fetchResult, len(repos))
+			var g errgroup.Group
+			g.SetLimit(fetchLimit)
+			for i, repo := range repos {
+				result := &results[i]
+				result.dest = installer.RepoStorePath(globalStoreDir, repo)
+				g.Go(func() error {
+					if _, statErr := os.Stat(result.dest); os.IsNotExist(statErr) {
+						result.notCloned = true
+						return nil
+					}
+					// Each worker records its own outcome and reports
+					// success: a repo whose fetch fails is a warning, not a
+					// reason to cancel the other fetches.
+					result.err = git.Fetch(result.dest)
+					return nil
+				})
+			}
+			_ = g.Wait()
+
 			anyUpdate := false
 
-			for _, repo := range repos {
-				dest := installer.RepoStorePath(globalStoreDir, repo)
-				if _, statErr := os.Stat(dest); os.IsNotExist(statErr) {
+			for i, repo := range repos {
+				dest := results[i].dest
+				if results[i].notCloned {
 					fmt.Printf("%-40s  not cloned\n", repo)
 					continue
 				}
 
 				fmt.Printf("Fetching %s ...\n", repo)
-				if err := git.Fetch(dest); err != nil {
+				if err := results[i].err; err != nil {
 					fmt.Fprintf(os.Stderr, "warning: fetch %s: %v\n", repo, err)
 					continue
 				}
