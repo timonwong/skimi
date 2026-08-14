@@ -1381,6 +1381,146 @@ func TestUpdateReposFollowsForcePushedUpstream(t *testing.T) {
 	}
 }
 
+// TestUpdateReposUpdatesEverySelectedRepo pins the multi-repo contract of the
+// concurrent sync stage: every selected repo is pulled, and each skill's lock
+// entry records the new commit of its own repo.
+func TestUpdateReposUpdatesEverySelectedRepo(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+
+	storeDir := filepath.Join(dir, "store")
+	type repoFixture struct {
+		repoID    string
+		skill     string
+		origin    string
+		storeRepo string
+		oldCommit string
+		newCommit string
+	}
+	fixtures := []*repoFixture{
+		{repoID: "github.com/example/first", skill: "alpha"},
+		{repoID: "github.com/example/second", skill: "beta"},
+	}
+	for _, f := range fixtures {
+		f.origin = filepath.Join(dir, f.skill+"-origin")
+		makeSkillRepo(t, f.origin, map[string]string{f.skill: f.skill + " v1"})
+		f.oldCommit = gitHead(t, f.origin)
+		f.storeRepo = RepoStorePath(storeDir, f.repoID)
+		cloneStore(t, f.origin, f.storeRepo)
+		makeSkillRepoCommit(t, f.origin, map[string]string{f.skill: f.skill + " v2"})
+		f.newCommit = gitHead(t, f.origin)
+	}
+
+	lockPath := filepath.Join(dir, "skills-lock.yaml")
+	lf := &types.LockFile{}
+	cfg := &types.SkmConfig{Agents: &types.DefaultAgentsConfig{Default: []string{types.AgentClaude}}}
+	var repos []string
+	for _, f := range fixtures {
+		lf.Skills = append(lf.Skills, types.InstalledSkill{
+			Name:       f.skill,
+			Repo:       f.repoID,
+			Commit:     f.oldCommit,
+			SkillPath:  filepath.Join(f.storeRepo, f.skill),
+			SourcePath: f.skill,
+			LinkedTo:   []string{filepath.Join(home, ".claude", "skills", f.skill)},
+		})
+		cfg.Packages = append(cfg.Packages, types.SkillPackageConfig{Repo: f.repoID, Skills: selectors(f.skill)})
+		repos = append(repos, f.repoID)
+	}
+	writeLock(t, lockPath, lf)
+
+	if err := UpdateRepos(cfg, repos, Options{StoreDir: storeDir, LockPath: lockPath}); err != nil {
+		t.Fatalf("UpdateRepos() error: %v", err)
+	}
+
+	got := readLock(t, lockPath)
+	byName := make(map[string]types.InstalledSkill, len(got.Skills))
+	for _, skill := range got.Skills {
+		byName[skill.Name] = skill
+	}
+	if len(got.Skills) != len(fixtures) {
+		t.Fatalf("lock entries = %d, want %d: %+v", len(got.Skills), len(fixtures), got.Skills)
+	}
+	for _, f := range fixtures {
+		entry, ok := byName[f.skill]
+		if !ok {
+			t.Fatalf("lock is missing %q: %+v", f.skill, got.Skills)
+		}
+		if entry.Commit != f.newCommit {
+			t.Errorf("%s commit = %q, want %q", f.skill, entry.Commit, f.newCommit)
+		}
+		if body := skillBody(t, f.storeRepo, f.skill); !strings.Contains(body, f.skill+" v2") {
+			t.Errorf("%s store SKILL.md = %q, want the updated content", f.skill, body)
+		}
+		link := filepath.Join(home, ".claude", "skills", f.skill)
+		if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			t.Errorf("%s link: %v %v", f.skill, fi, err)
+		}
+	}
+}
+
+// TestRunSyncsSharedRepoOnceForEveryPackage covers a config whose packages
+// point at different subdirs of one repo, written in two different spellings:
+// the sync stage collapses them to a single clone, and both packages still
+// install from that one store copy.
+func TestRunSyncsSharedRepoOnceForEveryPackage(t *testing.T) {
+	const repoID = "github.com/example/shared"
+
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	t.Setenv("HOME", home)
+
+	origin := filepath.Join(dir, "origin")
+	if err := os.MkdirAll(origin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, origin, "init", "-b", "main")
+	gitRun(t, origin, "config", "user.email", "test@example.com")
+	gitRun(t, origin, "config", "user.name", "Test User")
+	writeSkill(t, filepath.Join(origin, "packs", "one", "alpha"), "alpha")
+	writeSkill(t, filepath.Join(origin, "packs", "two", "beta"), "beta")
+	gitRun(t, origin, "add", ".")
+	gitRun(t, origin, "commit", "-m", "initial skills")
+	redirectClones(t, "https://"+repoID, origin)
+
+	storeDir := filepath.Join(dir, "store")
+	lockPath := filepath.Join(dir, "lock.yaml")
+	cfg := &types.SkmConfig{
+		Agents: &types.DefaultAgentsConfig{Default: []string{types.AgentClaude}},
+		Packages: []types.SkillPackageConfig{
+			{Repo: repoID + "/packs/one"},
+			{Repo: "https://" + repoID + "/packs/two"},
+		},
+	}
+
+	if err := Run(cfg, Options{StoreDir: storeDir, LockPath: lockPath}); err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	got := readLock(t, lockPath)
+	if len(got.Skills) != 2 {
+		t.Fatalf("lock entries = %+v, want alpha and beta", got.Skills)
+	}
+	wantCommit := gitHead(t, origin)
+	storeRepo := RepoStorePath(storeDir, repoID)
+	for _, skill := range got.Skills {
+		if skill.Repo != repoID {
+			t.Errorf("%s repo = %q, want %q", skill.Name, skill.Repo, repoID)
+		}
+		if skill.Commit != wantCommit {
+			t.Errorf("%s commit = %q, want %q", skill.Name, skill.Commit, wantCommit)
+		}
+		if !strings.HasPrefix(skill.SkillPath, storeRepo+string(filepath.Separator)) {
+			t.Errorf("%s skill path = %q, want it inside the single store copy %q", skill.Name, skill.SkillPath, storeRepo)
+		}
+		link := filepath.Join(home, ".claude", "skills", skill.Name)
+		if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			t.Errorf("%s link: %v %v", skill.Name, fi, err)
+		}
+	}
+}
+
 func bytesTrimSpace(b []byte) []byte {
 	for len(b) > 0 && (b[0] == ' ' || b[0] == '\n' || b[0] == '\t' || b[0] == '\r') {
 		b = b[1:]
