@@ -74,7 +74,7 @@ func preservedCandidates(lf *types.LockFile, winners []installCandidate) []insta
 		if _, ok := taken[skill.Name]; ok {
 			continue
 		}
-		out = append(out, installCandidate{entry: skill, agents: agentLabels(skill.LinkedTo), preserved: true})
+		out = append(out, installCandidate{entry: skill, preserved: true})
 	}
 	return out
 }
@@ -170,7 +170,7 @@ func UpdateRepos(cfg *types.SkmConfig, repos []string, opts Options) error {
 			key = "local:" + skill.LocalPath
 		}
 		if _, declared := declaredSources[key]; !declared {
-			candidates = append(candidates, installCandidate{entry: skill, agents: agentLabels(skill.LinkedTo), preserved: true})
+			candidates = append(candidates, installCandidate{entry: skill, preserved: true})
 		}
 	}
 	for _, pkg := range cfg.Packages {
@@ -192,33 +192,11 @@ func UpdateRepos(cfg *types.SkmConfig, repos []string, opts Options) error {
 		}
 		for _, skill := range lf.Skills {
 			if (repoID != "" && skill.Repo == repoID) || (pkg.LocalPath != "" && skill.LocalPath == pkg.LocalPath) {
-				candidates = append(candidates, installCandidate{entry: skill, agents: agentLabels(skill.LinkedTo), preserved: true})
+				candidates = append(candidates, installCandidate{entry: skill, preserved: true})
 			}
 		}
 	}
 	return applyPlan(lf, resolveCollisions(candidates), opts)
-}
-
-func agentLabels(links []string) []string {
-	out := make([]string, len(links))
-	for i, link := range links {
-		slash := filepath.ToSlash(link)
-		switch {
-		case strings.Contains(slash, "/.claude/skills/"):
-			out[i] = types.AgentClaude
-		case strings.Contains(slash, "/.agents/skills/"):
-			out[i] = types.AgentStandard
-		case strings.Contains(slash, "/.codex/skills/"):
-			out[i] = types.AgentCodex
-		case strings.Contains(slash, "/.openclaw/skills/"):
-			out[i] = types.AgentOpenClaw
-		case strings.Contains(slash, "/.pi/agent/skills/"):
-			out[i] = types.AgentPi
-		default:
-			out[i] = "unknown"
-		}
-	}
-	return out
 }
 
 type repoPackage struct {
